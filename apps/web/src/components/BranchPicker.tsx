@@ -1,5 +1,6 @@
 import { useLegendListRef } from "~/hooks/useLegendListRef";
 import type { VcsRef } from "@t3tools/contracts";
+import { getVcsTerminology, type VcsTerminology } from "@t3tools/shared/vcs";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { useId, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { T, useGT } from "gt-react";
@@ -39,6 +40,7 @@ export function BranchPicker({
   renderItem,
   getItemType,
   children,
+  terminology = getVcsTerminology("git"),
 }: {
   items: string[];
   filteredItems: string[];
@@ -58,6 +60,7 @@ export function BranchPicker({
   renderItem: (value: string, index: number) => ReactNode;
   getItemType?: ((value: string) => string) | undefined;
   children: ReactNode;
+  terminology?: VcsTerminology;
 }) {
   const gt = useGT();
   const highlightedValueRef = useRef<string | null>(null);
@@ -107,7 +110,7 @@ export function BranchPicker({
       {children}
       <ComboboxPopup {...popupProps}>
         <ComboboxSearchInput
-          placeholder={gt("Search refs...")}
+          placeholder={terminology.kind === "jj" ? gt("Search bookmarks...") : gt("Search refs...")}
           value={query}
           onChange={(event) => {
             onQueryChange(event.target.value);
@@ -129,7 +132,7 @@ export function BranchPicker({
         />
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <ComboboxEmpty>
-            <T>No refs found.</T>
+            {terminology.kind === "jj" ? <T>No bookmarks found.</T> : <T>No refs found.</T>}
           </ComboboxEmpty>
           <div className="relative flex min-h-0 w-full max-h-56 flex-1 flex-col overflow-hidden">
             <ComboboxListVirtualized className="flex size-full min-h-0 min-w-0 flex-col">
@@ -176,18 +179,30 @@ export function BranchPicker({
                       id={startFromOriginSwitchId}
                       checked={originControl.checked}
                       size="sm"
-                      aria-label={gt("Start worktree from remote")}
+                      aria-label={
+                        terminology.kind === "jj"
+                          ? gt("Start workspace from remote")
+                          : gt("Start worktree from remote")
+                      }
                       onCheckedChange={(checked) => originControl.onCheckedChange(Boolean(checked))}
                     />
                   </label>
                 }
               />
               <TooltipPopup side="top" className="max-w-72 whitespace-normal">
-                <T>
-                  Uses the latest commit of the base branch’s tracked remote branch, even if its
-                  name differs. Otherwise uses the same-named branch on origin. Uses your local
-                  branch if that remote branch is missing.
-                </T>
+                {terminology.kind === "jj" ? (
+                  <T>
+                    Uses the latest commit of the base bookmark’s tracked remote bookmark, even if
+                    its name differs. Otherwise uses the same-named bookmark on origin. Uses your
+                    local bookmark if that remote bookmark is missing.
+                  </T>
+                ) : (
+                  <T>
+                    Uses the latest commit of the base branch’s tracked remote branch, even if its
+                    name differs. Otherwise uses the same-named branch on origin. Uses your local
+                    branch if that remote branch is missing.
+                  </T>
+                )}
               </TooltipPopup>
             </Tooltip>
           ) : null}
@@ -207,6 +222,7 @@ export function BranchPickerRefItem({
   disabled,
   onClick,
   onContextMenu,
+  terminology = getVcsTerminology("git"),
 }: {
   branch: VcsRef;
   projectCwd: string | null;
@@ -215,6 +231,7 @@ export function BranchPickerRefItem({
   disabled?: boolean;
   onClick: ComponentProps<typeof ComboboxItem>["onClick"];
   onContextMenu?: ComponentProps<typeof ComboboxItem>["onContextMenu"];
+  terminology?: VcsTerminology;
 }) {
   const gt = useGT();
   const itemValue = refName.name;
@@ -223,7 +240,9 @@ export function BranchPickerRefItem({
   const badge = refName.current
     ? gt("current", { $context: "git ref badge, the checked-out branch" })
     : hasSecondaryWorktree
-      ? gt("worktree", { $context: "git ref badge, checked out in another worktree" })
+      ? terminology.kind === "jj"
+        ? gt("workspace", { $context: "jj bookmark badge, checked out in another workspace" })
+        : gt("worktree", { $context: "git ref badge, checked out in another worktree" })
       : refName.isRemote
         ? gt("remote", { $context: "git ref badge, a remote branch" })
         : refName.isDefault

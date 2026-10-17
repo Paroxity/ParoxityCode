@@ -15,6 +15,7 @@ import {
 import { useSearchableSetting } from "./settingsSearch";
 import { WorktreeCleanupSection, WorktreesDirectoryRow } from "./StorageSettings";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
+import { useVcsTerminology } from "../../state/vcs";
 
 function StartFromRemoteRow() {
   const gt = useGT();
@@ -59,8 +60,18 @@ function StartFromRemoteRow() {
 export function WorktreesSettingsPanel() {
   const gt = useGT();
   const searchableSetting = useSearchableSetting();
-  const { scope } = useSettingsScope();
+  const { scope, target } = useSettingsScope();
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
+  const checkout =
+    scope.kind === "checkout"
+      ? scope.checkout
+      : scope.kind === "project"
+        ? scope.members.find((member) => member.id === target?.projectId)
+        : null;
+  const vcsTerminology = useVcsTerminology(
+    checkout?.environmentId ?? null,
+    checkout?.workspaceRoot ?? null,
+  );
 
   return (
     <SettingsPageContainer>
@@ -75,7 +86,7 @@ export function WorktreesSettingsPanel() {
         </AdvancedSettings>
       </SettingsSection>
       <SettingsSection id="worktree-branches" title={gt("Branches")}>
-        <BranchNamingSettings />
+        <BranchNamingSettings terminology={vcsTerminology} />
       </SettingsSection>
       <WorktreeCleanupSection />
     </SettingsPageContainer>
