@@ -99,7 +99,7 @@ import { pullRequestCompletionScope } from "./PullRequestMarkdownTextarea";
 import { PullRequestChangeBreakdownStat } from "./PullRequestChangeBreakdownStat";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { PullRequestThreadLinks } from "./PullRequestThreadLinks";
-import { vcsEnvironment } from "~/state/vcs";
+import { useVcsTerminology, vcsEnvironment } from "~/state/vcs";
 import { RelativeTime } from "~/components/RelativeTime";
 import { useUiStateStore } from "~/uiStateStore";
 import { Button } from "../ui/button";
@@ -693,6 +693,7 @@ export function PullRequestDetailPanel({
         sourceControlClients.parseChangeRequestUrl(handoffSummary.url)?.link.repositoryUrl ?? null,
       )
     : loadingCheckoutCommand;
+  const vcsTerminology = useVcsTerminology(environmentId, detail?.workspaceRoot ?? null);
   const branchRefsQuery = useEnvironmentQuery(
     detail === null
       ? null
@@ -1192,22 +1193,40 @@ export function PullRequestDetailPanel({
               title: mode === "local" ? m(msg("Checked out here")) : m(msg("Checked out")),
               description:
                 mode === "local"
-                  ? m(
-                      msg(
-                        "This repository is on the {term, select, mr {merge request} cr {change request} other {pull request}}'s branch, with a thread open on it.",
-                        {
-                          term: changeRequestTermKind(terminology),
-                        },
+                  ? vcsTerminology.kind === "jj"
+                    ? m(
+                        msg(
+                          "This repository is on the {term, select, mr {merge request} cr {change request} other {pull request}}'s bookmark, with a thread open on it.",
+                          {
+                            term: changeRequestTermKind(terminology),
+                          },
+                        ),
+                      )
+                    : m(
+                        msg(
+                          "This repository is on the {term, select, mr {merge request} cr {change request} other {pull request}}'s branch, with a thread open on it.",
+                          {
+                            term: changeRequestTermKind(terminology),
+                          },
+                        ),
+                      )
+                  : vcsTerminology.kind === "jj"
+                    ? m(
+                        msg(
+                          "The {term, select, mr {merge request} cr {change request} other {pull request}} is in its own workspace, with a thread open on it.",
+                          {
+                            term: changeRequestTermKind(terminology),
+                          },
+                        ),
+                      )
+                    : m(
+                        msg(
+                          "The {term, select, mr {merge request} cr {change request} other {pull request}} is in its own worktree, with a thread open on it.",
+                          {
+                            term: changeRequestTermKind(terminology),
+                          },
+                        ),
                       ),
-                    )
-                  : m(
-                      msg(
-                        "The {term, select, mr {merge request} cr {change request} other {pull request}} is in its own worktree, with a thread open on it.",
-                        {
-                          term: changeRequestTermKind(terminology),
-                        },
-                      ),
-                    ),
             }
           : offHeadPullRequestCheckoutToast(terminology),
       );
@@ -1518,6 +1537,7 @@ export function PullRequestDetailPanel({
   // thread the branch is already under the reader's feet, so neither offers it there.
   const checkoutMenuItems = (
     <PullRequestCheckoutMenuItems
+      vcsTerminology={vcsTerminology}
       handoff={handoff}
       checkoutRoot={checkoutRoot}
       canPrepareWorktree={canPrepareWorktree}

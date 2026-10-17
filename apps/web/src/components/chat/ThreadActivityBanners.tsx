@@ -1,3 +1,4 @@
+import type { VcsTerminology } from "@t3tools/shared/vcs";
 import type {
   EnvironmentId,
   OrchestrationV2PendingBackgroundTask,
@@ -305,6 +306,7 @@ export function backgroundWorkNowItem(
 /** The local checkout moved off the branch this thread last ran on. */
 export function branchMismatchBannerItem(
   input: {
+    readonly terminology: VcsTerminology;
     readonly mismatchKey: string;
     readonly mismatch: { readonly threadBranch: string; readonly currentBranch: string };
     readonly restoreDisabled: boolean;
@@ -315,11 +317,12 @@ export function branchMismatchBannerItem(
   resolve: MessageResolver = m,
 ): ComposerBannerStackItem {
   const { mismatch } = input;
+  const jj = input.terminology.kind === "jj";
   return {
     id: `branch-mismatch:${input.mismatchKey}`,
     variant: "warning",
     icon: <GitBranchIcon />,
-    title: resolve(msg("Branch changed")),
+    title: jj ? resolve(msg("Bookmark changed")) : resolve(msg("Branch changed")),
     description: (
       <Tooltip>
         <TooltipTrigger render={<span className="min-w-0 truncate" />}>
@@ -342,10 +345,18 @@ export function branchMismatchBannerItem(
         disabled={input.restoreDisabled}
         onClick={input.onRestore}
       >
-        {input.restoring ? <T>Restoring...</T> : <T>Restore branch</T>}
+        {input.restoring ? (
+          <T>Restoring...</T>
+        ) : jj ? (
+          <T>Restore bookmark</T>
+        ) : (
+          <T>Restore branch</T>
+        )}
       </Button>
     ),
-    dismissLabel: resolve(msg("Dismiss branch change notice")),
+    dismissLabel: jj
+      ? resolve(msg("Dismiss bookmark change notice"))
+      : resolve(msg("Dismiss branch change notice")),
     onDismiss: input.onDismiss,
   };
 }

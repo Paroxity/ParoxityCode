@@ -87,12 +87,12 @@ import {
 import { terminalEnvironment } from "../state/terminal";
 import { knownTerminalSessionsAtom, useKnownTerminalSessions } from "../state/terminalSessions";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { useEnvironmentQuery } from "../state/query";
+import { useEnvironmentQuery, useEnvironmentQuerySelector } from "../state/query";
 import { focusActivePanelTerminal, focusTerminal } from "../lib/terminalFocus";
 import { requestSideChatComposerFocus } from "../lib/workspaceFocus";
 import type { TerminalContextSelection } from "../lib/terminalContext";
 import { useAtomCommand } from "../state/use-atom-command";
-import { vcsEnvironment } from "../state/vcs";
+import { selectVcsActionsSupported, vcsEnvironment } from "../state/vcs";
 import {
   isThreadlessSurfacesRef,
   threadlessSurfacesProjectRef,
@@ -282,12 +282,24 @@ export function useThreadSurfaceOpeners(threadRef: ScopedThreadRef) {
           : isPreviewSupportedInRuntime() || serverBrowser
             ? null
             : gt("Only available in the desktop app.");
+  const vcsActionsSupported = useEnvironmentQuerySelector(
+    context.gitCwd === null
+      ? null
+      : vcsEnvironment.status({
+          environmentId: threadRef.environmentId,
+          input: { cwd: context.gitCwd, includeRemote: false },
+        }),
+    selectVcsActionsSupported,
+  );
   const available: Record<LauncherSurfaceKind, boolean> = {
     browser: browserUnavailableReason === null,
     terminal: context.gitCwd !== null && canOperateTerminal,
     files: context.workspaceRoot !== null,
     // Outside a Git repository it opens on its empty state.
-    diff: (context.isServerThread || context.threadless) && context.gitCwd !== null,
+    diff:
+      (context.isServerThread || context.threadless) &&
+      context.gitCwd !== null &&
+      vcsActionsSupported,
     "pull-request": pullRequestTarget !== null,
     "pull-requests":
       context.isServerThread &&

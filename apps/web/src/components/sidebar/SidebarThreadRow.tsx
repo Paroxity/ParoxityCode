@@ -1,6 +1,7 @@
 import { asLaunchingThread } from "@t3tools/client-runtime/state/thread-inbox";
 import { useAtomMount } from "@effect/atom-react";
 import { formatModelSlugName } from "@t3tools/shared/model";
+import { resolveVcsTerminology, type VcsTerminology } from "@t3tools/shared/vcs";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
@@ -740,6 +741,7 @@ type SidebarThreadRowProps = {
     threadRef: ScopedThreadRef,
     position: { x: number; y: number },
     source: ContextMenuSource,
+    terminology: VcsTerminology,
   ) => void;
   onSettle: (threadRef: ScopedThreadRef) => void;
   onActionSweepStart: (
@@ -986,7 +988,12 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   };
   const handleContextMenu = (event: ReactMouseEvent) => {
     event.preventDefault();
-    onContextMenu(threadRef, { x: event.clientX, y: event.clientY }, contextMenuSourceOf(event));
+    onContextMenu(
+      threadRef,
+      { x: event.clientX, y: event.clientY },
+      contextMenuSourceOf(event),
+      resolveVcsTerminology(visibleGitStatus),
+    );
   };
   const handleKeyDown = (event: ReactKeyboardEvent) => {
     if (event.target !== event.currentTarget) return;
@@ -1855,6 +1862,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
     threadRef: ScopedThreadRef,
     position: { x: number; y: number },
     source: ContextMenuSource,
+    terminology: VcsTerminology,
   ) => void;
   onFileDropThreads: (threadRef: ScopedThreadRef, files: File[]) => void;
 }) {
@@ -1966,6 +1974,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
                   threadRef,
                   { x: event.clientX, y: event.clientY },
                   contextMenuSourceOf(event),
+                  resolveVcsTerminology(visibleGitStatus),
                 );
               }}
               className={cn(

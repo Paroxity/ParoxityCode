@@ -13,6 +13,7 @@ import { T, useGT } from "gt-react";
 import { useState } from "react";
 import { useT3ProjectFileState } from "../../hooks/useT3ProjectFileScripts";
 import { useEnvironments } from "../../state/environments";
+import { useVcsTerminology } from "../../state/vcs";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
   editorRequestForScript,
@@ -75,6 +76,11 @@ export function ProjectActionsSettings() {
   );
 
   const representativeMember = target?.projectId ? memberById.get(target.projectId) : undefined;
+  const checkout = scope.kind === "checkout" ? scope.checkout : representativeMember;
+  const vcsTerminology = useVcsTerminology(
+    checkout?.environmentId ?? null,
+    checkout?.workspaceRoot ?? null,
+  );
   const t3File = useT3ProjectFileState(
     representativeMember?.environmentId ?? EnvironmentId.make("none"),
     representativeMember?.workspaceRoot ?? null,
@@ -185,7 +191,11 @@ export function ProjectActionsSettings() {
         mixed={mixed}
         leading={<PlusIcon />}
         title={gt("Add action")}
-        description={gt("Runs in this checkout or its worktree, with an optional shortcut.")}
+        description={
+          vcsTerminology.kind === "jj"
+            ? gt("Runs in this working copy or its workspace, with an optional shortcut.")
+            : gt("Runs in this checkout or its worktree, with an optional shortcut.")
+        }
         onResetOverride={() => void persist(() => null)}
         control={
           <Button
@@ -211,6 +221,7 @@ export function ProjectActionsSettings() {
       {target && (
         <ProjectScriptEditorDialog
           environmentId={target.environmentId}
+          workspaceNoun={vcsTerminology.workspaceNoun}
           editScope={AuthSettingsWriteScope}
           request={request}
           scripts={scripts}

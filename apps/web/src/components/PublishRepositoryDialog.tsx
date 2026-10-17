@@ -186,6 +186,9 @@ export interface PublishRepositoryDialogProps {
   readonly threadRef: ScopedThreadRef | null;
   readonly gitCwd: string;
   readonly offeredProviders: OfferedSourceControlProviders | undefined;
+  readonly vcsActionsSupported: boolean;
+  /** The server's reason the repository cannot be used, shown as is. */
+  readonly unsupportedReason: string | null;
 }
 
 /**
@@ -258,6 +261,7 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
 
   const repositoryPath = `${owner.trim()}/${repositoryName.trim()}`;
   const canSubmit =
+    props.vcsActionsSupported &&
     publishRepositoryAction.isAllowed &&
     hasReadyProvider &&
     providerReady &&
@@ -371,6 +375,11 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
               </DialogDescription>
             </DialogHeader>
             <DialogPanel>
+              {props.unsupportedReason !== null ? (
+                <p role="alert" className="text-caption text-warning-foreground">
+                  {props.unsupportedReason}
+                </p>
+              ) : null}
               <div className="flex flex-col gap-1.5">
                 <Label render={<span />}>
                   <T>Provider</T>

@@ -1,5 +1,6 @@
 import { ThreadId, type WorktreeSetupSnapshot } from "@t3tools/contracts";
-import { expect, it, vi } from "vite-plus/test";
+import { getVcsTerminology } from "@t3tools/shared/vcs";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { act, fakeTimers, render } from "../../../test/render";
 import { WorktreeSetupRows } from "./WorktreeSetupCard";
@@ -42,8 +43,8 @@ function snapshot(overrides: Partial<WorktreeSetupSnapshot>): WorktreeSetupSnaps
   };
 }
 
-const rows = (value: WorktreeSetupSnapshot) => (
-  <WorktreeSetupRows snapshot={value} onOpenTerminal={null} />
+const rows = (value: WorktreeSetupSnapshot, kind: "git" | "jj" = "git") => (
+  <WorktreeSetupRows snapshot={value} terminology={getVcsTerminology(kind)} onOpenTerminal={null} />
 );
 
 it("ticks the running stage duration", async () => {
@@ -85,4 +86,70 @@ it("keeps the finished setup duration at its end", async () => {
     await vi.advanceTimersByTimeAsync(5_000);
   });
   expect(section.element().textContent).toContain("Set up worktree t3/feature5s");
+});
+
+function finished(phase: WorktreeSetupSnapshot["phase"]): WorktreeSetupSnapshot {
+  return snapshot({
+    phase,
+    endedAt: phase === "running" ? null : "2026-10-26T12:00:05.000Z",
+    stages: [],
+  });
+}
+
+describe("WorktreeSetupRows terminology", () => {
+  it.each([
+    ["git", "Worktree", "Set up worktree t3/feature"],
+    ["jj", "Workspace", "Set up workspace t3/feature"],
+  ] as const)(
+    "uses %s labels for completed and interrupted setup",
+    async (kind, title, summary) => {
+      for (const phase of ["done", "failed", "cancelled"] as const) {
+        await using screen = await render(rows(finished(phase), kind));
+        const { container } = screen;
+        expect(container.querySelector(`[aria-label="${title} setup"]`)).not.toBeNull();
+        if (phase === "done") expect(container.textContent).toContain(summary);
+      }
+    },
+  );
+
+  it.each([
+    ["git", "Fetched base branch"],
+    ["jj", "Fetched base bookmark"],
+  ] as const)("names the %s base ref when the fetch has no ref name", async (kind, label) => {
+    const failedSetup = snapshot({ phase: "failed", endedAt: "2026-10-26T12:00:05.000Z" });
+    await using screen = await render(rows({ ...failedSetup, baseRef: null }, kind));
+    expect(
+      screen.container.querySelector('[data-worktree-setup-stage="fetch"]')?.textContent,
+    ).toContain(label);
+  });
+
+  it("keeps setup script failure visible in Jujutsu summaries", async () => {
+    const failedSetup = finished("done");
+    await using screen = await render(
+      rows(
+        {
+          ...failedSetup,
+          stages: [
+            {
+              id: "setup-script",
+              status: "failed",
+              startedAt: failedSetup.startedAt,
+              endedAt: failedSetup.endedAt,
+              percent: null,
+              detail: null,
+              tail: [],
+            },
+          ],
+        },
+        "jj",
+      ),
+    );
+    const { container } = screen;
+    expect(container.querySelector('[aria-label="Workspace setup"]')).not.toBeNull();
+    expect(
+      container.querySelector(
+        '[data-worktree-setup-stage="setup-script"][data-worktree-setup-status="failed"]',
+      )?.textContent,
+    ).toContain("Failed setup script");
+  });
 });

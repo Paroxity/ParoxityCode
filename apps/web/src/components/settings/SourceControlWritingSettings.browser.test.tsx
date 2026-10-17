@@ -1,5 +1,6 @@
 import { render } from "../../../test/render";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+import { getVcsTerminology } from "@t3tools/shared/vcs";
 import { StrictMode, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
@@ -11,6 +12,9 @@ type WritingStyle = typeof DEFAULT_UNIFIED_SETTINGS.sourceControlWritingStyle;
 const state = vi.hoisted(() => ({
   styles: [] as WritingStyle[],
   updateSettings: vi.fn<(patch: ScopedSettingsPatch) => void>(),
+  vcsKind: "git" as "git" | "jj",
+  scopeKind: "all" as "all" | "project" | "checkout",
+  terminologyLookup: vi.fn(),
 }));
 
 vi.mock(import("@tanstack/react-router"), async (original) => ({
@@ -31,13 +35,28 @@ vi.mock(import("./useScopedSettings"), async (original) => ({
 vi.mock(import("./SettingsScopeContext"), async (original) => ({
   ...(await original()),
   useSettingsScope: (() => ({
-    scope: { kind: "all", environmentIds: [] },
+    scope: {
+      kind: state.scopeKind,
+      environmentIds: [],
+      checkout: {
+        id: "naming-project",
+        environmentId: "naming-environment",
+        workspaceRoot: "/naming-project",
+      },
+      members: [
+        {
+          id: "naming-project",
+          environmentId: "naming-environment",
+          workspaceRoot: "/naming-project",
+        },
+      ],
+    },
     environment: null,
     connectedEnvironments: [],
     targets: state.styles.map((style) => ({
       settings: { ...DEFAULT_UNIFIED_SETTINGS, sourceControlWritingStyle: style },
     })),
-    target: null,
+    target: { projectId: "naming-project" },
   })) as never,
 }));
 vi.mock(import("../../state/environments"), async (original) => ({
@@ -47,6 +66,18 @@ vi.mock(import("../../state/environments"), async (original) => ({
 vi.mock(import("./SettingsModelPicker"), async (original) => ({
   ...(await original()),
   SettingsModelPicker: (() => null) as never,
+}));
+vi.mock(import("../../state/vcs"), async (original) => ({
+  ...(await original()),
+  useVcsTerminology: (environmentId, workspaceRoot) => {
+    state.terminologyLookup(environmentId, workspaceRoot);
+    return getVcsTerminology(state.vcsKind);
+  },
+}));
+vi.mock(import("./StorageSettings"), async (original) => ({
+  ...(await original()),
+  WorktreeCleanupSection: (() => null) as never,
+  WorktreesDirectoryRow: (() => null) as never,
 }));
 vi.mock(import("./settingsLayout"), async (original) => ({
   ...(await original()),
@@ -62,6 +93,7 @@ vi.mock(import("./settingsLayout"), async (original) => ({
 }));
 
 import { SourceControlWritingSettingsSection } from "./SourceControlWritingSettings";
+import { WorktreesSettingsPanel } from "./WorktreesSettings";
 
 const resetButton = (label: string) =>
   page.getByRole("button", { name: `Reset ${label} to default` });
@@ -73,6 +105,9 @@ const content = () => (
 );
 
 async function setup() {
+  state.vcsKind = "git";
+  state.scopeKind = "all";
+  state.terminologyLookup.mockReset();
   state.styles = [
     {
       ...DEFAULT_UNIFIED_SETTINGS.sourceControlWritingStyle,
@@ -117,5 +152,28 @@ describe("mixed source control instructions", () => {
     expect(
       state.styles.map(({ mode, customInstructions }) => ({ mode, customInstructions })),
     ).toEqual(initialInstructions);
+  });
+});
+
+describe("checkout-aware source control naming", () => {
+  it.each([
+    ["git", "branch", "checkout"],
+    ["jj", "bookmark", "checkout"],
+    ["jj", "bookmark", "project"],
+  ] as const)("uses %s naming in %s controls for %s scope", async (kind, noun, scopeKind) => {
+    await using _writing = await setup();
+    state.vcsKind = kind;
+    state.scopeKind = scopeKind;
+    await using _screen = await render(
+      <StrictMode>
+        <WorktreesSettingsPanel />
+      </StrictMode>,
+    );
+
+    expect(state.terminologyLookup).toHaveBeenCalledWith("naming-environment", "/naming-project");
+    await userEvent.click(resetButton(`${noun} naming`));
+    expect(state.updateSettings).toHaveBeenCalledWith({
+      branchNamingMode: DEFAULT_UNIFIED_SETTINGS.branchNamingMode,
+    });
   });
 });

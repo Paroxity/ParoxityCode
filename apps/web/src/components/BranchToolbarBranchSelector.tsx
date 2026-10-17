@@ -36,12 +36,14 @@ import {
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { readLocalApi } from "../localApi";
+import { useStableCallback } from "../hooks/useStableCallback";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { usePaginatedBranches } from "../state/queries";
 import { useProjectClone } from "../state/projectClones";
 import { readThreadShell, useProject, useQuietThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
+import { resolveVcsTerminology, supportsVcsActions } from "@t3tools/shared/vcs";
 import { threadEnvironment } from "../state/threads";
 import { pullRequestEnvironment } from "../state/pullRequests";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -370,16 +372,18 @@ export function BranchToolbarBranchSelector({
   );
   const activeProjectCheckoutRoot = projectStatusQuery.data?.workingTree.rootPath;
   const trimmedBranchQuery = branchQuery.trim();
+  const vcsActionsSupported = supportsVcsActions(branchStatusQuery.data);
   const branchRefState = usePaginatedBranches(
     {
       environmentId,
-      cwd: branchCwd,
+      cwd: vcsActionsSupported ? branchCwd : null,
       // Substring search needs sanitized names to detect new-branch collisions; refs cannot contain ASCII
       // spaces.
       query: sanitizeNewRefName(trimmedBranchQuery),
     },
     messages,
   );
+  const vcsTerminology = resolveVcsTerminology(branchStatusQuery.data);
   const refs = branchRefState.refs;
   const isWorktreeChangeBlockedForRef = (refName: VcsRef) =>
     activeProjectCwd !== null &&
@@ -437,7 +441,11 @@ export function BranchToolbarBranchSelector({
   // Open change requests in this project, newest first, to start the thread from one. Read only
   // while the picker is open; picking one runs the same prepare flow as a pasted reference.
   const pullRequestListQuery = useEnvironmentQuery(
-    isBranchMenuOpen && canChangeThreadBranch && onCheckoutPullRequestRequest && activeProject
+    isBranchMenuOpen &&
+      vcsActionsSupported &&
+      canChangeThreadBranch &&
+      onCheckoutPullRequestRequest &&
+      activeProject
       ? pullRequestEnvironment.list({
           environmentId,
           input: { state: "open", projectId: activeProject.id, limit: 5 },
@@ -471,7 +479,7 @@ export function BranchToolbarBranchSelector({
   const listedActiveBranch =
     resolvedActiveBranch === null ? null : (branchByName.get(resolvedActiveBranch) ?? null);
   const activeBranchRefQuery = useEnvironmentQuery(
-    branchCwd !== null && resolvedActiveBranch !== null
+    vcsActionsSupported && branchCwd !== null && resolvedActiveBranch !== null
       ? vcsEnvironment.listRefs({
           environmentId,
           input: {
@@ -494,26 +502,47 @@ export function BranchToolbarBranchSelector({
   const [isBranchActionPending, startBranchActionTransition] = useTransition();
   const totalBranchCount = branchRefState.data?.totalCount ?? 0;
   const branchStatusText = isInitialBranchesLoadPending
-    ? gt("Loading refs...")
+    ? vcsTerminology.kind === "jj"
+      ? gt("Loading bookmarks...")
+      : gt("Loading refs...")
     : isFetchingNextPage
-      ? gt("Loading more refs...")
+      ? vcsTerminology.kind === "jj"
+        ? gt("Loading more bookmarks...")
+        : gt("Loading more refs...")
       : hasNextPage
-        ? gt(
-            "{total, plural, one {Showing {shown} of {total} refs} other {Showing {shown} of {total} refs}}",
-            { shown: refs.length, total: totalBranchCount },
-          )
+        ? vcsTerminology.kind === "jj"
+          ? gt(
+              "{total, plural, one {Showing {shown} of {total} bookmarks} other {Showing {shown} of {total} bookmarks}}",
+              { shown: refs.length, total: totalBranchCount },
+            )
+          : gt(
+              "{total, plural, one {Showing {shown} of {total} refs} other {Showing {shown} of {total} refs}}",
+              { shown: refs.length, total: totalBranchCount },
+            )
         : null;
 
   const copyBranchName = (branchName: string) => {
-    void writeTextToClipboard(branchName, {
-      target: "branch name",
-      unavailableMessage: msg("Clipboard API is unavailable while copying branch name."),
-      failureMessage: msg("Failed to copy branch name to the clipboard."),
-    }).then(undefined, (error: unknown) => {
+    void writeTextToClipboard(
+      branchName,
+      vcsTerminology.kind === "jj"
+        ? {
+            target: "bookmark name",
+            unavailableMessage: msg("Clipboard API is unavailable while copying bookmark name."),
+            failureMessage: msg("Failed to copy bookmark name to the clipboard."),
+          }
+        : {
+            target: "branch name",
+            unavailableMessage: msg("Clipboard API is unavailable while copying branch name."),
+            failureMessage: msg("Failed to copy branch name to the clipboard."),
+          },
+    ).then(undefined, (error: unknown) => {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: gt("Failed to copy branch name"),
+          title:
+            vcsTerminology.kind === "jj"
+              ? gt("Failed to copy bookmark name")
+              : gt("Failed to copy branch name"),
           description: toBranchActionErrorMessage(error),
         }),
       );
@@ -527,7 +556,11 @@ export function BranchToolbarBranchSelector({
     event.preventDefault();
     event.stopPropagation();
     const items: ContextMenuItem<"copy-branch-name">[] = [
-      { id: "copy-branch-name", label: gt("Copy branch name"), icon: "copy" },
+      {
+        id: "copy-branch-name",
+        label: vcsTerminology.kind === "jj" ? gt("Copy bookmark name") : gt("Copy branch name"),
+        icon: "copy",
+      },
     ];
     void api.contextMenu.show(items, { x: event.clientX, y: event.clientY }).then((action) => {
       if (action === "copy-branch-name") copyBranchName(branchName);
@@ -536,6 +569,7 @@ export function BranchToolbarBranchSelector({
 
   const runBranchAction = (action: () => Promise<void>) => {
     if (
+      !vcsActionsSupported ||
       !readEnvironmentScope(environmentId, AuthSourceControlWriteScope) ||
       (hasServerThread && !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope))
     ) {
@@ -543,7 +577,10 @@ export function BranchToolbarBranchSelector({
         stackedThreadToast({
           type: "error",
           title: gt("Action unavailable"),
-          description: gt("This connection cannot change the thread's branch."),
+          description:
+            vcsTerminology.kind === "jj"
+              ? gt("This connection cannot change the thread's bookmark.")
+              : gt("This connection cannot change the thread's branch."),
         }),
       );
       return;
@@ -567,7 +604,14 @@ export function BranchToolbarBranchSelector({
   };
 
   const selectBranch = async (listedRef: VcsRef) => {
-    if (!canUpdateThreadBranch || !branchCwd || !activeProjectCwd || isBranchActionPending) return;
+    if (
+      !vcsActionsSupported ||
+      !canUpdateThreadBranch ||
+      !branchCwd ||
+      !activeProjectCwd ||
+      isBranchActionPending
+    )
+      return;
     const selectionId = ++latestSelectionIdRef.current;
 
     let latest = readLatestThreadState();
@@ -668,7 +712,10 @@ export function BranchToolbarBranchSelector({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: gt("Failed to switch ref."),
+            title:
+              vcsTerminology.kind === "jj"
+                ? gt("Failed to switch bookmark.")
+                : gt("Failed to switch ref."),
             description: toBranchActionErrorMessage(squashAtomCommandFailure(checkoutResult)),
           }),
         );
@@ -677,7 +724,7 @@ export function BranchToolbarBranchSelector({
   };
 
   const createRef = (rawName: string) => {
-    if (!canChangeThreadBranch) return;
+    if (!vcsActionsSupported || !canChangeThreadBranch) return;
     const name = sanitizeNewRefName(rawName);
     if (!branchCwd || !name || isBranchActionPending) return;
     latestSelectionIdRef.current++;
@@ -714,7 +761,10 @@ export function BranchToolbarBranchSelector({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: gt("Failed to create and switch ref."),
+            title:
+              vcsTerminology.kind === "jj"
+                ? gt("Failed to create and switch bookmark.")
+                : gt("Failed to create and switch ref."),
             description: toBranchActionErrorMessage(squashAtomCommandFailure(createBranchResult)),
           }),
         );
@@ -754,6 +804,7 @@ export function BranchToolbarBranchSelector({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- writes a default base branch to the server thread or draft once branches load for a new worktree thread
   useEffect(() => {
     if (
+      !vcsActionsSupported ||
       threadStarted ||
       effectiveEnvMode !== "worktree" ||
       activeWorktreePath ||
@@ -764,6 +815,7 @@ export function BranchToolbarBranchSelector({
     }
     setThreadBranch(worktreeBaseBranchCandidate, null, true);
   }, [
+    vcsActionsSupported,
     activeThreadBranch,
     activeWorktreePath,
     effectiveEnvMode,
@@ -772,7 +824,9 @@ export function BranchToolbarBranchSelector({
     worktreeBaseBranchCandidate,
   ]);
 
-  const handleOpenChange = (open: boolean) => {
+  const handleOpenChange = useStableCallback((open: boolean) => {
+    // The composer chip's menu also holds the workspace modes, which stay usable without VCS actions.
+    if (open && !vcsActionsSupported && !(displayMode === "toolbar" && renderWorkspaceMenu)) return;
     setIsBranchMenuOpen(open);
     if (open && !isBranchMenuOpen && branchCwd !== null) {
       void refreshLocalStatusForPicker({
@@ -784,19 +838,19 @@ export function BranchToolbarBranchSelector({
       setFocusBranchSearch(false);
       setBranchQuery("");
     }
-  };
+  });
 
   useImperativeHandle(
     ref,
     () => ({
       focus: () => triggerRef.current?.focus({ preventScroll: true }),
       open: () => {
-        if (isInitialBranchesLoadPending || isBranchActionPending) return;
+        if (!vcsActionsSupported || isInitialBranchesLoadPending || isBranchActionPending) return;
         setFocusBranchSearch(true);
         handleOpenChange(true);
       },
     }),
-    [handleOpenChange, isBranchActionPending, isInitialBranchesLoadPending],
+    [handleOpenChange, isBranchActionPending, isInitialBranchesLoadPending, vcsActionsSupported],
   );
 
   // Until git reports the ref, a placeholder holds the label's place so the
@@ -820,6 +874,7 @@ export function BranchToolbarBranchSelector({
       resolvedActiveBranch,
       resolvedActiveBranchIsRemote,
       startFromOrigin,
+      terminology: vcsTerminology,
     },
     messages,
   );
@@ -835,8 +890,8 @@ export function BranchToolbarBranchSelector({
   const openPrLink = useOpenPrLink(threadRef);
   const linkedIssues = serverThread?.issues ?? [];
 
-  function selectPickerItem(itemValue: string) {
-    if (isInitialBranchesLoadPending || isBranchActionPending) return;
+  const selectPickerItem = useStableCallback((itemValue: string) => {
+    if (!vcsActionsSupported || isInitialBranchesLoadPending || isBranchActionPending) return;
     if (itemValue === checkoutPullRequestItemValue && prReference && onCheckoutPullRequestRequest) {
       latestSelectionIdRef.current++;
       handleOpenChange(false);
@@ -857,7 +912,10 @@ export function BranchToolbarBranchSelector({
       const refName = branchByName.get(itemValue);
       if (refName) void selectBranch(refName);
     }
-  }
+  });
+  const loadNextBranches = useStableCallback(() => {
+    if (vcsActionsSupported) branchRefState.loadNext();
+  });
 
   function renderPickerItem(itemValue: string, index: number) {
     if (checkoutPullRequestItemValue && itemValue === checkoutPullRequestItemValue) {
@@ -894,9 +952,15 @@ export function BranchToolbarBranchSelector({
           onClick={() => selectPickerItem(itemValue)}
         >
           <span className="truncate">
-            <T>
-              Create new ref &quot;<Var>{newRefName}</Var>&quot;
-            </T>
+            {vcsTerminology.kind === "jj" ? (
+              <T>
+                Create new bookmark &quot;<Var>{newRefName}</Var>&quot;
+              </T>
+            ) : (
+              <T>
+                Create new ref &quot;<Var>{newRefName}</Var>&quot;
+              </T>
+            )}
           </span>
         </ComboboxItem>
       );
@@ -947,6 +1011,7 @@ export function BranchToolbarBranchSelector({
 
     return (
       <BranchPickerRefItem
+        terminology={vcsTerminology}
         branch={refName}
         projectCwd={activeProjectCwd}
         index={index}
@@ -954,6 +1019,7 @@ export function BranchToolbarBranchSelector({
         selected={itemValue === resolvedActiveBranch}
         groupLabel={pickerGroupLabels.get(itemValue) ?? null}
         disabled={
+          !vcsActionsSupported ||
           !canUpdateThreadBranch ||
           (!canWriteSourceControl &&
             !isSelectingWorktreeBase &&
@@ -974,9 +1040,10 @@ export function BranchToolbarBranchSelector({
 
   return (
     <BranchPicker
+      terminology={vcsTerminology}
       items={branchPickerItems}
       filteredItems={filteredBranchPickerItems}
-      open={isBranchMenuOpen}
+      open={isBranchMenuOpen && vcsActionsSupported}
       onOpenChange={handleOpenChange}
       onSelectItem={selectPickerItem}
       value={resolvedActiveBranch}
@@ -984,7 +1051,7 @@ export function BranchToolbarBranchSelector({
       onQueryChange={setBranchQuery}
       hasNextPage={hasNextPage}
       isFetchingNextPage={isFetchingNextPage}
-      onLoadNext={branchRefState.loadNext}
+      onLoadNext={loadNextBranches}
       statusText={branchStatusText}
       notice={
         refs.some((refName) => isWorktreeChangeBlockedForRef(refName))
@@ -1003,14 +1070,23 @@ export function BranchToolbarBranchSelector({
       }
       originControl={
         isSelectingWorktreeBase
-          ? { checked: startFromOrigin, onCheckedChange: onStartFromOriginChange }
+          ? {
+              checked: startFromOrigin,
+              onCheckedChange: (checked) => {
+                if (vcsActionsSupported) onStartFromOriginChange(checked);
+              },
+            }
           : undefined
       }
       renderPopup={
         displayMode === "toolbar" && renderWorkspaceMenu
           ? (children) =>
               renderWorkspaceMenu({
-                label: isActiveBranchResolving ? gt("Loading ref…") : triggerLabel,
+                label: isActiveBranchResolving
+                  ? vcsTerminology.kind === "jj"
+                    ? gt("Loading bookmark…")
+                    : gt("Loading ref…")
+                  : triggerLabel,
                 disabled: isBranchActionPending,
                 open: isBranchMenuOpen,
                 focusSearch: focusBranchSearch,
@@ -1069,9 +1145,15 @@ export function BranchToolbarBranchSelector({
                 )
               }
               className="min-w-0 max-w-full active:scale-100"
-              disabled={isInitialBranchesLoadPending || isBranchActionPending}
+              disabled={
+                !vcsActionsSupported || isInitialBranchesLoadPending || isBranchActionPending
+              }
               // NVDA browse mode re-reads a combobox when its attributes change, not when its text does.
-              aria-label={gt("Branch: {branch}", { branch: triggerLabel })}
+              aria-label={
+                vcsTerminology.kind === "jj"
+                  ? gt("Bookmark: {branch}", { branch: triggerLabel })
+                  : gt("Branch: {branch}", { branch: triggerLabel })
+              }
             >
               <GitBranchIcon
                 className={cn(

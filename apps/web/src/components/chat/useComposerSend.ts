@@ -1,8 +1,9 @@
 import { msg } from "gt-react";
-import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
+import { thrownErrorMessage, vcsOperationErrorMessage } from "@t3tools/client-runtime/errors";
 import { m } from "~/i18n/messages";
 import { isClearComposerCommand, parseSideChatCommand } from "@t3tools/shared/composerTrigger";
 import { armFreshSession, disarmFreshSession, readFreshSessionArm } from "./freshSessionArms";
+import type { VcsTerminology } from "@t3tools/shared/vcs";
 import {
   mergeDirectPreviewAnnotation,
   resolveBackgroundDraftWorkspaceOptions,
@@ -202,6 +203,8 @@ type UsageLimitsPanel = ReturnType<typeof useUsageLimitsPanel>;
 type TimelineFollow = ReturnType<typeof useTimelineFollow>;
 
 interface ComposerSendInput {
+  readonly vcsWorkspacePreparationBlocked: boolean;
+  readonly vcsTerminology: VcsTerminology;
   readonly environmentId: EnvironmentId;
   readonly routeThreadKey: string;
   readonly currentRouteThreadKeyRef: { readonly current: string | null };
@@ -432,6 +435,7 @@ export function useComposerSend(input: ComposerSendInput) {
     },
   ) => {
     e?.preventDefault();
+    if (input.vcsWorkspacePreparationBlocked) return;
     // What the user pressed send on; uploads below can take a while, and a redirect must not
     // decline approvals for a draft that changed meanwhile.
     const promptAtSend = promptRef.current;
@@ -766,10 +770,22 @@ export function useComposerSend(input: ComposerSendInput) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
-          title: m(msg("Choose models and a base branch")),
-          description: m(
-            msg("Multiple models need a new thread in a Git project. Each gets its own worktree."),
-          ),
+          title:
+            input.vcsTerminology.kind === "jj"
+              ? m(msg("Choose models and a base bookmark"))
+              : m(msg("Choose models and a base branch")),
+          description:
+            input.vcsTerminology.kind === "jj"
+              ? m(
+                  msg(
+                    "Multiple models need a new thread in a Jujutsu project. Each gets its own workspace.",
+                  ),
+                )
+              : m(
+                  msg(
+                    "Multiple models need a new thread in a Git project. Each gets its own worktree.",
+                  ),
+                ),
         }),
       );
       return;
@@ -1197,8 +1213,8 @@ export function useComposerSend(input: ComposerSendInput) {
       const draftBeforeDecline = useComposerDraftStore
         .getState()
         .getComposerDraft(composerDraftTarget);
-      const pendingIdsBeforeDecline = pendingApprovalsRef.current.map(
-        (approval) => approval.requestId,
+      const pendingIdsBeforeDecline = new Set(
+        pendingApprovalsRef.current.map((approval) => approval.requestId),
       );
       const approvalResponding = approvalsToDecline.some((approval) =>
         respondingRequestIdsRef.current.includes(approval.requestId),
@@ -1253,7 +1269,7 @@ export function useComposerSend(input: ComposerSendInput) {
       // An approval that arrived during the decline would block the redirect; keep the draft so
       // the next send declines it too.
       const approvalArrived = pendingApprovalsRef.current.some(
-        (approval) => !pendingIdsBeforeDecline.includes(approval.requestId),
+        (approval) => !pendingIdsBeforeDecline.has(approval.requestId),
       );
       if (
         !declined ||
@@ -1685,10 +1701,9 @@ export function useComposerSend(input: ComposerSendInput) {
       }
       if (!isAtomCommandInterrupted(failure)) {
         const error = squashAtomCommandFailure(failure);
-        setThreadError(
-          threadIdForSend,
-          thrownErrorMessage(error, m) ?? m(msg("Failed to send message.")),
-        );
+        const fallbackMessage = m(msg("Failed to send message."));
+        const failureMessage = vcsOperationErrorMessage(error, fallbackMessage, m);
+        setThreadError(threadIdForSend, failureMessage);
         if (
           draftId &&
           (backgroundDraftOpened || currentRouteThreadKeyRef.current !== routeThreadKey)
@@ -1700,7 +1715,7 @@ export function useComposerSend(input: ComposerSendInput) {
                 submissionIntent === "background"
                   ? m(msg("Background task failed"))
                   : m(msg("Could not start thread")),
-              description: thrownErrorMessage(error, m) ?? m(msg("Failed to send message.")),
+              description: failureMessage,
               actionProps: {
                 children: m(msg("Open draft")),
                 onClick: () => {

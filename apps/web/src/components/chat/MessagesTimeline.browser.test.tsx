@@ -3,6 +3,7 @@ import { injectHtmlRenderBootstrap } from "@t3tools/shared/htmlRender";
 import { HtmlRenderDocument } from "../files/BrowserDocumentFrame";
 import { flushSync } from "react-dom";
 import { AudioPreview } from "../files/AudioPreview";
+import { getVcsTerminology } from "@t3tools/shared/vcs";
 import { cdp, page, userEvent } from "vite-plus/test/browser";
 import {
   ComposerContextId,
@@ -223,6 +224,48 @@ function renderTimeline(entries: ReadonlyArray<Entry>, props: Partial<TimelinePr
     <MessagesTimeline {...baseProps()} timelineEntries={entries as Entry[]} {...props} />,
   );
 }
+
+describe("MessagesTimeline checkout terminology", () => {
+  it.each([
+    ["git", "Worktree setup", "Fetching base branch"],
+    ["jj", "Workspace setup", "Fetching base bookmark"],
+  ] as const)("uses %s setup terminology", async (kind, sectionLabel, stageLabel) => {
+    using _vcs = createVcsHarness();
+    vcsState.kind = kind;
+    await using screen = await renderTimeline([], {
+      workspaceRoot: "/checkout",
+      isWorking: true,
+      isPreparingWorktree: true,
+      worktreeSetup: {
+        threadId: ThreadId.make("thread-1"),
+        phase: "running",
+        startedAt: CREATED_AT,
+        endedAt: null,
+        branch: null,
+        baseRef: null,
+        worktreePath: null,
+        setupScript: null,
+        stages: [
+          {
+            id: "fetch",
+            status: "running",
+            startedAt: CREATED_AT,
+            endedAt: null,
+            percent: null,
+            detail: null,
+            tail: [],
+          },
+        ],
+        error: null,
+        sequence: 0,
+      },
+    });
+    await expect
+      .element(screen.getByRole("region", { name: sectionLabel, exact: true }))
+      .toHaveTextContent(stageLabel);
+    expect(vcsState.lookup).toHaveBeenCalledWith(ENVIRONMENT_ID, "/checkout");
+  });
+});
 
 async function click(element: HTMLElement) {
   await act(async () => element.click());
@@ -2588,6 +2631,25 @@ describe("compact reasoning math", () => {
     expect(tree.children).toEqual([{ type: "text", value: `${head}yz` }]);
   });
 });
+
+const vcsState = vi.hoisted(() => ({ kind: "git" as "git" | "jj", lookup: vi.fn() }));
+vi.mock(import("../../state/vcs"), async (original) => ({
+  ...(await original()),
+  useVcsTerminology: (environmentId, workspaceRoot) => {
+    vcsState.lookup(environmentId, workspaceRoot);
+    return getVcsTerminology(vcsState.kind);
+  },
+}));
+function createVcsHarness(): Disposable {
+  vcsState.kind = "git";
+  vcsState.lookup.mockReset();
+  return {
+    [Symbol.dispose]() {
+      vcsState.kind = "git";
+      vcsState.lookup.mockReset();
+    },
+  };
+}
 
 it("renders automatic compaction as one live divider that finishes with its reason and token delta", async () => {
   setup();

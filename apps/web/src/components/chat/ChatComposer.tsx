@@ -380,6 +380,7 @@ export interface ChatComposerProps {
   supportsQuestionAttachments: boolean;
   maxFileAttachmentBytes: number | null;
   routeKind: "server" | "draft";
+  workspaceNoun: string;
   routeThreadRef: ScopedThreadRef;
   draftId: DraftId | null;
   multipleModelSelections: ReadonlyArray<ModelSelection> | null;
@@ -523,6 +524,7 @@ export function ChatComposer(props: ChatComposerProps) {
     composerDraftTarget,
     environmentId,
     canOperateThread,
+    workspaceNoun,
     attachmentUploadsCapabilityKnown,
     supportsAttachmentUploads,
     supportsQuestionAttachments,
@@ -3973,6 +3975,7 @@ export function ChatComposer(props: ChatComposerProps) {
                   sendDisabledReason={primaryActionSendDisabledReason}
                   isEnvironmentUnavailable={primaryActionEnvironmentUnavailable}
                   isPreparingWorktree={isPreparingWorktree}
+                  workspaceNoun={workspaceNoun}
                   hasSendableContent={composerSendState.hasSendableContent}
                   canResume={showResumeAction}
                   preserveComposerFocusOnPointerDown={isMobileViewport}

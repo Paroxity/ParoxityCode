@@ -1,5 +1,6 @@
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import type { VcsStatusResult } from "@t3tools/contracts";
+import { resolveVcsUnsupportedReason } from "@t3tools/shared/vcs";
 import { T, useGT } from "gt-react";
 import { FileDiffIcon, GitBranchIcon, GitBranchPlusIcon } from "lucide-react";
 import { useId, useState } from "react";
@@ -159,9 +160,13 @@ export function GitCommitDialog({
   const noneSelected = selectedFiles.length === 0;
   const excludedCount = allFiles.length - selectedFiles.length;
   const refName = gitStatus?.refName ?? null;
+  const jj = gitStatus?.vcs?.kind === "jj";
+  const unsupportedReason = resolveVcsUnsupportedReason(gitStatus);
+  const noRefLabel = jj ? gt("(no bookmark)") : gt("(detached HEAD)");
+  const newRefLabel = jj ? gt("New bookmark") : gt("New branch");
   const branchItems = [
-    { value: "current", label: refName ?? gt("(detached HEAD)") },
-    { value: "new", label: gt("New branch") },
+    { value: "current", label: refName ?? noRefLabel },
+    { value: "new", label: newRefLabel },
   ];
 
   const toggleFile = (path: string) => {
@@ -174,7 +179,10 @@ export function GitCommitDialog({
   };
 
   const submitDisabled =
-    noneSelected || !canWriteSourceControl || (branchTarget === "new" && !canChangeThreadBranch);
+    noneSelected ||
+    !canWriteSourceControl ||
+    unsupportedReason !== null ||
+    (branchTarget === "new" && !canChangeThreadBranch);
   const submit = () => {
     if (submitDisabled) return;
     const trimmedMessage = commitMessage.trim();
@@ -199,10 +207,18 @@ export function GitCommitDialog({
           <DialogTitle>{gt("Commit changes")}</DialogTitle>
         </DialogHeader>
         <DialogPanel>
+          {unsupportedReason !== null ? (
+            <p role="alert" className="text-caption text-warning-foreground">
+              {unsupportedReason}
+            </p>
+          ) : null}
+          {jj ? (
+            <p className="text-caption text-muted-foreground">
+              <T>Jujutsu does not run Git hooks.</T>
+            </p>
+          ) : null}
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor={branchFieldId}>
-              <T>Branch</T>
-            </Label>
+            <Label htmlFor={branchFieldId}>{jj ? <T>Bookmark</T> : <T>Branch</T>}</Label>
             <Select
               value={branchTarget}
               onValueChange={(value) => setBranchTarget(value === "new" ? "new" : "current")}
@@ -221,7 +237,7 @@ export function GitCommitDialog({
                 <SelectItem value="current">
                   <span className="flex min-w-0 items-center gap-2">
                     <GitBranchIcon />
-                    <span className="min-w-0 truncate">{refName ?? gt("(detached HEAD)")}</span>
+                    <span className="min-w-0 truncate">{refName ?? noRefLabel}</span>
                     {isDefaultRef ? (
                       <Badge variant="warning">
                         {gt("default", { $context: "git ref badge, the default branch" })}
@@ -232,7 +248,7 @@ export function GitCommitDialog({
                 <SelectItem value="new">
                   <span className="flex min-w-0 items-center gap-2">
                     <GitBranchPlusIcon />
-                    <span className="shrink-0">{gt("New branch")}</span>
+                    <span className="shrink-0">{newRefLabel}</span>
                     {refName ? (
                       <span className="min-w-0 truncate text-dim-foreground">
                         {gt("from {branch}", {
@@ -318,7 +334,13 @@ export function GitCommitDialog({
             <T>Cancel</T>
           </Button>
           <Button size="standard" disabled={submitDisabled} onClick={submit}>
-            {branchTarget === "new" ? <T>Commit on new branch</T> : <T context="verb">Commit</T>}
+            {branchTarget !== "new" ? (
+              <T context="verb">Commit</T>
+            ) : jj ? (
+              <T>Commit on new bookmark</T>
+            ) : (
+              <T>Commit on new branch</T>
+            )}
             <DialogSubmitKbd />
           </Button>
         </DialogFooter>

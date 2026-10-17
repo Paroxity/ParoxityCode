@@ -469,6 +469,7 @@ export function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
     <WorktreeSetupRows
       environmentId={ctx.activeThreadEnvironmentId}
       snapshot={worktreeSetup}
+      terminology={ctx.vcsTerminology}
       startingLabel={providerStartingLabel}
       onOpenTerminal={openTerminal && terminalId ? () => openTerminal(terminalId) : null}
     />
