@@ -6,6 +6,7 @@ import {
   type VcsRef,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { GIT_VCS_TERMINOLOGY } from "@t3tools/shared/vcs";
 import { dedupeRemoteBranchesWithLocalMatches } from "@t3tools/shared/git";
 import {
   deriveLocalBranchNameFromRemoteRef,
@@ -158,7 +159,7 @@ describe("resolveLockedWorkspaceLabel", () => {
     ["/home/me/.t3/worktrees/app/t3-ff466c42/", "t3-ff466c42"],
     ["C:\\Users\\me\\worktrees\\feature-x", "feature-x"],
   ])("names the worktree at %s", (path, label) => {
-    expect(resolveLockedWorkspaceLabel(path, "worktree")).toBe(label);
+    expect(resolveLockedWorkspaceLabel(path, "worktree", GIT_VCS_TERMINOLOGY)).toBe(label);
   });
 });
 

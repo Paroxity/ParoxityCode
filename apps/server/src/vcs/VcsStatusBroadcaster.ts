@@ -1306,13 +1306,18 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const branchVcs = (cwd: string) =>
+    detectStatusRepository(cwd).pipe(
+      Effect.map((handle) => (handle?.kind === "jj" ? { vcs: { kind: "jj" as const } } : {})),
+    );
+
   const refreshBranchStatus: VcsStatusBroadcaster["Service"]["refreshBranchStatus"] = Effect.fn(
     "VcsStatusBroadcaster.refreshBranchStatus",
   )(function* (input) {
     const cwd = yield* withFileSystem(normalizeCwd(input.cwd));
     if (!detailedSubscribers.has(cwd)) {
       const { refName, isRepo } = yield* refreshBranchStatusCore(cwd);
-      return { refName, isRepo };
+      return { refName, isRepo, ...(yield* branchVcs(cwd)) };
     }
     const { observation, refName, isRepo } = yield* readHeadBranch(cwd);
     yield* publishBranch(cwd, { refName, isRepo }, observation);
@@ -1325,7 +1330,7 @@ export const make = Effect.gen(function* () {
       ),
       Effect.forkIn(broadcasterScope),
     );
-    return { refName, isRepo };
+    return { refName, isRepo, ...(yield* branchVcs(cwd)) };
   });
 
   const streamBranchStatus: VcsStatusBroadcaster["Service"]["streamBranchStatus"] = (input) =>
@@ -1335,11 +1340,12 @@ export const make = Effect.gen(function* () {
         const subscription = yield* PubSub.subscribe(branchChangesPubSub);
         yield* Effect.acquireRelease(retainHeadWatcher(cwd), () => releaseHeadWatcher(cwd));
         const branch = yield* refreshBranchStatusCore(cwd);
+        const vcs = yield* branchVcs(cwd);
         return Stream.concat(
-          Stream.make({ refName: branch.refName, isRepo: branch.isRepo }),
+          Stream.make({ refName: branch.refName, isRepo: branch.isRepo, ...vcs }),
           Stream.fromSubscription(subscription).pipe(
             Stream.filter((event) => event.cwd === cwd && event.revision > branch.revision),
-            Stream.map(({ refName, isRepo }) => ({ refName, isRepo })),
+            Stream.map(({ refName, isRepo }) => ({ refName, isRepo, ...vcs })),
           ),
         ).pipe(
           Stream.changesWith(

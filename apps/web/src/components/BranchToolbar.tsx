@@ -23,6 +23,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { VcsTerminology } from "@t3tools/shared/vcs";
 import { flushSync } from "react-dom";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
@@ -79,6 +80,8 @@ import { useComposerMenuProps } from "./chat/composerEventScope";
 import { cn } from "~/lib/utils";
 
 import { observeResize } from "~/lib/observeResize";
+import { selectVcsActionsSupported, selectVcsTerminology, vcsEnvironment } from "../state/vcs";
+import { useEnvironmentQuerySelector } from "../state/query";
 
 const isClipboardApiUnavailableError = Schema.is(ClipboardApiUnavailableError);
 const isClipboardWriteError = Schema.is(ClipboardWriteError);
@@ -164,6 +167,7 @@ interface RunContextSelectorProps {
   onAutoEnvironment?: (() => void) | undefined;
   envLocked: boolean;
   envModeLocked: boolean;
+  vcsActionsSupported: boolean;
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[] | undefined;
   showEnvironmentPicker: boolean;
@@ -177,6 +181,7 @@ interface RunContextSelectorProps {
   onUsePreviousWorktree: () => void;
   addTargets: readonly AddProjectTarget[];
   onAddToMachine: (environmentId: EnvironmentId) => void;
+  terminology: VcsTerminology;
 }
 
 const RunContextSelector = memo(function RunContextSelector({
@@ -188,6 +193,7 @@ const RunContextSelector = memo(function RunContextSelector({
   onAutoEnvironment,
   envLocked,
   envModeLocked,
+  vcsActionsSupported,
   environmentId,
   availableEnvironments,
   showEnvironmentPicker,
@@ -201,6 +207,7 @@ const RunContextSelector = memo(function RunContextSelector({
   onUsePreviousWorktree,
   addTargets,
   onAddToMachine,
+  terminology,
 }: RunContextSelectorProps) {
   const gt = useGT();
   const m = useMessages();
@@ -217,12 +224,12 @@ const RunContextSelector = memo(function RunContextSelector({
         ? FolderGitIcon
         : FolderIcon;
   const workspaceLabel = forceNewWorktree
-    ? resolveEnvModeLabel("worktree", m)
+    ? resolveEnvModeLabel("worktree", terminology, m)
     : envModeLocked
-      ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode, m)
+      ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode, terminology, m)
       : effectiveEnvMode === "worktree"
-        ? resolveEnvModeLabel("worktree", m)
-        : resolveCurrentWorkspaceLabel(activeWorktreePath, m);
+        ? resolveEnvModeLabel("worktree", terminology, m)
+        : resolveCurrentWorkspaceLabel(activeWorktreePath, terminology, m);
   const isPanel = displayMode === "panel";
   const workspaceModesLocked = envModeLocked || !offersWorkspaceModes;
   const isLocked = envLocked || (workspaceModesLocked && (!isPanel || !showEnvironmentPicker));
@@ -243,7 +250,9 @@ const RunContextSelector = memo(function RunContextSelector({
       <TooltipPopup>
         {isPanel
           ? forceNewWorktree
-            ? gt("Each model starts in its own worktree.")
+            ? terminology.kind === "jj"
+              ? gt("Each model starts in its own workspace.")
+              : gt("Each model starts in its own worktree.")
             : (workspacePath ?? workspaceLabel)
           : workspaceLabel}
       </TooltipPopup>
@@ -437,6 +446,7 @@ const RunContextSelector = memo(function RunContextSelector({
             <MenuRadioGroup
               value={effectiveEnvMode}
               onValueChange={(value) => {
+                if (value !== "local" && !vcsActionsSupported) return;
                 if (value === "previous-worktree") {
                   onUsePreviousWorktree();
                   return;
@@ -455,18 +465,33 @@ const RunContextSelector = memo(function RunContextSelector({
                   ) : (
                     <FolderIcon className="size-3" />
                   )}
-                  <MiddleTruncate value={resolveCurrentWorkspaceLabel(activeWorktreePath, m)} />
+                  <MiddleTruncate
+                    value={resolveCurrentWorkspaceLabel(activeWorktreePath, terminology, m)}
+                  />
                 </span>
               </MenuRadioItem>
-              <MenuRadioItem disabled={envModeLocked} value="worktree" closeOnClick>
+              <MenuRadioItem
+                disabled={envModeLocked || !vcsActionsSupported}
+                value="worktree"
+                closeOnClick
+              >
                 <span className="flex min-w-0 items-center gap-1.5">
                   <FolderGit2Icon className="size-3" />
-                  <span className="min-w-0 truncate">{resolveEnvModeLabel("worktree", m)}</span>
+                  <span className="min-w-0 truncate">
+                    {resolveEnvModeLabel("worktree", terminology, m)}
+                  </span>
                 </span>
               </MenuRadioItem>
               {previousWorktreeLabel ? (
-                <MenuRadioItem disabled={envModeLocked} value="previous-worktree" closeOnClick>
-                  <PreviousWorktreeItemContent branch={previousWorktreeBranch} />
+                <MenuRadioItem
+                  disabled={envModeLocked || !vcsActionsSupported}
+                  value="previous-worktree"
+                  closeOnClick
+                >
+                  <PreviousWorktreeItemContent
+                    branch={previousWorktreeBranch}
+                    terminology={terminology}
+                  />
                 </MenuRadioItem>
               ) : null}
             </MenuRadioGroup>
@@ -676,6 +701,15 @@ export const BranchToolbar = memo(function BranchToolbar({
   const activeWorktreePath = forceNewWorktree ? null : worktreePath;
   const effectiveEnvMode = forceNewWorktree ? "worktree" : envMode;
   const envModeLocked = envLocked || (isServerThread && activeWorktreePath !== null);
+  const workspaceCwd = activeWorktreePath ?? activeProject?.workspaceRoot ?? null;
+  // Use the branch selector's full-status key for toolbar and workspace-panel controls.
+  const showVcsControls = activeProject !== null && showGitControls;
+  const vcsStatusAtom =
+    showVcsControls && workspaceCwd !== null
+      ? vcsEnvironment.status({ environmentId, input: { cwd: workspaceCwd } })
+      : null;
+  const vcsTerminology = useEnvironmentQuerySelector(vcsStatusAtom, selectVcsTerminology);
+  const vcsActionsSupported = useEnvironmentQuerySelector(vcsStatusAtom, selectVcsActionsSupported);
 
   const canUsePreviousWorktree = !isServerThread && !envModeLocked && !forceNewWorktree;
   const projectRefsForWorktreeLookup = canUsePreviousWorktree ? [activeProjectRef] : [];
@@ -687,10 +721,10 @@ export const BranchToolbar = memo(function BranchToolbar({
       })
     : null;
   const previousWorktreeLabel = previousWorktreeSeed
-    ? resolvePreviousWorktreeLabel(previousWorktreeSeed, m)
+    ? resolvePreviousWorktreeLabel(previousWorktreeSeed, vcsTerminology, m)
     : null;
   const onUsePreviousWorktree = () => {
-    if (!previousWorktreeSeed) return;
+    if (!vcsActionsSupported || !previousWorktreeSeed) return;
     setDraftThreadContext(draftId ?? threadRef, {
       branch: previousWorktreeSeed.branch,
       worktreePath: previousWorktreeSeed.worktreePath,
@@ -758,6 +792,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             onAutoEnvironment={onAutoEnvironment}
             envLocked={envLocked}
             envModeLocked={envModeLocked}
+            vcsActionsSupported={vcsActionsSupported}
             environmentId={environmentId}
             availableEnvironments={availableEnvironments}
             showEnvironmentPicker={showEnvironmentPicker}
@@ -771,6 +806,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             onUsePreviousWorktree={onUsePreviousWorktree}
             addTargets={addTargets}
             onAddToMachine={onAddToMachine}
+            terminology={vcsTerminology}
           />
         ) : null}
         {panelSection !== "workspace" ? (
@@ -809,6 +845,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             onAutoEnvironment={onAutoEnvironment}
             envLocked={envLocked}
             envModeLocked={envModeLocked}
+            vcsActionsSupported={vcsActionsSupported}
             environmentId={environmentId}
             availableEnvironments={availableEnvironments}
             showEnvironmentPicker={showEnvironmentPicker}
@@ -822,6 +859,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             onUsePreviousWorktree={onUsePreviousWorktree}
             addTargets={addTargets}
             onAddToMachine={onAddToMachine}
+            terminology={vcsTerminology}
           />
         </div>
       ) : null}
@@ -857,12 +895,14 @@ export const BranchToolbar = memo(function BranchToolbar({
             <BranchToolbarEnvModeSelector
               forceNewWorktree={forceNewWorktree}
               envLocked={envModeLocked}
+              vcsActionsSupported={vcsActionsSupported}
               effectiveEnvMode={effectiveEnvMode}
               activeWorktreePath={activeWorktreePath}
               onEnvModeChange={onEnvModeChange}
               previousWorktreeLabel={previousWorktreeLabel}
               previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
               onUsePreviousWorktree={onUsePreviousWorktree}
+              terminology={vcsTerminology}
             />
           ) : null}
         </div>
