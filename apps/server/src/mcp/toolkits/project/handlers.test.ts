@@ -42,6 +42,7 @@ import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
 import * as SourceControlProviderRegistry from "../../../sourceControl/SourceControlProviderRegistry.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as VcsDriverRegistry from "../../../vcs/VcsDriverRegistry.ts";
+import * as JjWorkflow from "../../../jj/JjWorkflow.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as JjVcsDriver from "../../../vcs/JjVcsDriver.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
@@ -1202,6 +1203,11 @@ it.effect("an agent's clone is not cut off while git is still transferring", () 
         }),
       ),
       Layer.provide(Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({})),
+      Layer.provide(Layer.mock(JjWorkflow.JjWorkflow)({})),
+      // Cloning never reaches the jj driver.
+      Layer.provide(
+        Layer.succeed(JjVcsDriver.JjVcsDriver, {} as unknown as JjVcsDriver.JjVcsDriverShape),
+      ),
       Layer.provide(
         Layer.mock(GitVcsDriver.GitVcsDriver)({
           invalidateRefs: () => Effect.void,
