@@ -24,6 +24,7 @@ import * as Stream from "effect/Stream";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { makeLinkedThreadsChangeDetector } from "../pullRequest/linkedThreads.ts";
@@ -117,6 +118,7 @@ export const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const projectStore = yield* ProjectStore.ProjectStoreV2;
   const git = yield* GitManager.GitManager;
+  const workflow = yield* GitWorkflowService.GitWorkflowService;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const random = yield* SecureRandom.SecureRandom;
@@ -223,13 +225,19 @@ export const make = Effect.gen(function* () {
           if (first.branch !== null && repository === null) return finishBackfill(group);
           // A worktree folder can outlive its .git, and git there fails with not_a_repository.
           // An unreadable .git keeps the worktree rather than failing the whole group.
-          const cwd =
+          // A secondary jj workspace has .jj in place of .git.
+          const checkoutCwd =
             first.worktreePath !== null &&
-            (yield* fileSystem
+            ((yield* fileSystem
               .exists(path.join(first.worktreePath, ".git"))
-              .pipe(Effect.orElseSucceed(() => true)))
+              .pipe(Effect.orElseSucceed(() => true))) ||
+              (yield* fileSystem
+                .exists(path.join(first.worktreePath, ".jj"))
+                .pipe(Effect.orElseSucceed(() => true))))
               ? first.worktreePath
               : project.workspaceRoot;
+          const cwd =
+            first.branch === null ? checkoutCwd : yield* workflow.providerCwd(checkoutCwd);
           // A detected PR is confirmed against fresh git state before it is saved.
           const detected =
             first.branch === null
