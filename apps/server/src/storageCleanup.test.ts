@@ -1,53 +1,27 @@
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import type * as Digest from "effect/crypto/Digest";
-import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
-import * as Context from "effect/Context";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
+import { ChildProcessSpawner } from "effect/process";
 import * as Queue from "effect/Queue";
-import type * as Path from "effect/Path";
-import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { SCAN_CACHE_FILE_NAME } from "./usage/usageScanCache.ts";
 import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Sqlite from "./persistence/Sqlite.ts";
 import { checkpointRefForScopeOrdinal } from "./orchestration-v2/CheckpointService.ts";
-import {
-  DEFAULT_SERVER_SETTINGS,
-  type WorktreeKeepWhen,
-  type StorageCleanupSettings,
-  type TerminalMetadataStreamEvent,
-  type TerminalSummary,
-} from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, type WorktreeKeepWhen } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as ServerConfig from "./config.ts";
-import * as StorageCleanup from "./storageCleanup.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
-import * as GitManager from "./git/GitManager.ts";
-import * as GitWorkflowService from "./git/GitWorkflowService.ts";
-import * as Settings from "./serverSettings.ts";
-import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
-import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
-import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
-import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
-import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
-import * as TerminalManager from "./terminal/Manager.ts";
 import { CodexProviderCapabilitiesV2 } from "./orchestration-v2/Adapters/CodexAdapterV2.ts";
-import { ServerActivation } from "./serverActivation.ts";
 import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   CheckpointScopeId,
   EventId,
-  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
@@ -55,7 +29,6 @@ import {
   RuntimeRequestId,
   ThreadId,
   type OrchestrationV2DomainEvent,
-  type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -64,6 +37,7 @@ import {
   storageCleanupPullRequestMerged,
   storageCleanupThreadIdle,
 } from "./storageCleanup.ts";
+import { describeJj, runJj } from "./vcs/testing/JjTestSupport.ts";
 import {
   allocatedBytes,
   at,
@@ -76,6 +50,90 @@ import {
   shell,
   submoduleCleanupFixture,
 } from "./storageCleanup.testkit.ts";
+
+describeJj("Jujutsu worktree cleanup default discovery", () => {
+  it.live("keeps the workspace when the remote default is unavailable", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, fs, repo, worktree, command, setThreads } = yield* cleanupFixture(
+          {
+            ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+            worktreeAfterDays: null,
+            worktreeSettledAfterDays: null,
+            worktreeUnchanged: true,
+          },
+          { runJj },
+        );
+        // The unchanged rule waits for the thread to finish.
+        setThreads([shell({ branch: "feature", worktreePath: worktree, archivedAt: at(-DAY_MS) })]);
+        const remote = yield* fs.makeTempDirectoryScoped({ prefix: "cleanup-jj-remote-" });
+        yield* command(remote, ["init", "--bare", "-b", "trunk"]);
+        yield* command(repo, ["remote", "add", "origin", remote]);
+        // main exists, but the advertised default is unborn.
+        yield* command(repo, ["push", "origin", "main"]);
+        const report = yield* service.runNow;
+        expect(report.entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: "Default branch is unavailable",
+        });
+        expect(yield* fs.exists(worktree)).toBe(true);
+      }),
+    ),
+  );
+
+  it.live.each(["disabled", "age", "settled"] as const)(
+    "does not discover the remote default when merge rules are unnecessary (%s)",
+    (scenario) =>
+      runCleanupTest(
+        Effect.gen(function* () {
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+          let networkCalls = 0;
+          let stageInspections = 0;
+          const wrappedSpawner = ChildProcessSpawner.make((command) => {
+            if (command._tag === "StandardCommand" && command.command === "git") {
+              if (command.args.includes("ls-remote") || command.args.includes("fetch"))
+                networkCalls++;
+              if (command.args.includes("ls-files") && command.args.includes("--stage"))
+                stageInspections++;
+            }
+            return spawner.spawn(command);
+          });
+          yield* Effect.gen(function* () {
+            const { service, fs, repo, worktree, command, setThreads } = yield* cleanupFixture(
+              {
+                ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+                worktreeAfterDays: scenario === "age" ? 8 : null,
+                worktreeSettledAfterDays: scenario === "settled" ? 1 : null,
+                worktreeOnDelete: true,
+                worktreeUnchanged: scenario !== "disabled",
+                worktreeOnMerge: scenario !== "disabled",
+              },
+              { runJj },
+            );
+            const remote = yield* fs.makeTempDirectoryScoped({ prefix: "cleanup-jj-remote-" });
+            yield* command(remote, ["init", "--bare", "-b", "main"]);
+            yield* command(repo, ["remote", "add", "origin", remote]);
+            setThreads([
+              shell({
+                branch: "feature",
+                worktreePath: worktree,
+                ...(scenario === "settled" ? { settledAt: at(-3 * DAY_MS) } : {}),
+              }),
+            ]);
+            const report = yield* service.runNow;
+            expect(report.entries[0]?.outcome).toBe(scenario === "disabled" ? "kept" : "removed");
+            expect(yield* fs.exists(worktree)).toBe(scenario === "disabled");
+            expect(networkCalls).toBe(0);
+            // With no rule able to make it eligible, cleanup skips inspection entirely.
+            expect(stageInspections > 0).toBe(scenario !== "disabled");
+          }).pipe(
+            Effect.provide(Layer.empty, { local: true }),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, wrappedSpawner),
+          );
+        }),
+      ),
+  );
+});
 
 describe("V2 storage cleanup eligibility", () => {
   const candidate = () => shell({ branch: "feature", worktreePath: "/worktrees/feature" });
