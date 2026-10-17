@@ -115,6 +115,8 @@ export const VcsBranchStatus = Schema.Struct({
   refName: Schema.NullOr(Schema.String),
   /** Absent from older servers, where a removed checkout looks like a detached HEAD. */
   isRepo: Schema.optional(Schema.Boolean),
+  /** Present for Jujutsu so passive labels can use its terms without a full status read. */
+  vcs: Schema.optional(Schema.Struct({ kind: Schema.Literal("jj") })),
 });
 export type VcsBranchStatus = typeof VcsBranchStatus.Type;
 

@@ -74,6 +74,7 @@ export function PullRequestThreadDialogHost(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly cwd: string | null;
+  readonly vcsActionsSupported?: boolean;
   readonly onPrepared: (input: {
     branch: string;
     worktreePath: string | null;
@@ -81,7 +82,7 @@ export function PullRequestThreadDialogHost(props: {
   }) => Promise<void> | void;
 }) {
   const state = useThreadOverlay(pullRequestThreadDialogAtom, props.threadKey);
-  if (state === null) return null;
+  if (state === null || props.vcsActionsSupported === false) return null;
   return (
     <PullRequestThreadDialog
       key={state.key}
@@ -93,7 +94,9 @@ export function PullRequestThreadDialogHost(props: {
       onOpenChange={(open) => {
         if (!open) closeThreadOverlay(pullRequestThreadDialogAtom);
       }}
-      onPrepared={props.onPrepared}
+      onPrepared={(input) => {
+        if (props.vcsActionsSupported !== false) return props.onPrepared(input);
+      }}
     />
   );
 }
@@ -144,6 +147,8 @@ export function BranchRestoreConfirmHost(props: {
   readonly threadKey: string | null;
   readonly threadBranch: string;
   readonly canWriteSourceControl: boolean;
+  readonly refNoun: string;
+  readonly refSwitchChangesDescription: string;
   readonly onConfirm: () => void;
 }) {
   const open = useThreadOverlay(branchRestoreConfirmAtom, props.threadKey) !== null;
@@ -159,10 +164,7 @@ export function BranchRestoreConfirmHost(props: {
           <AlertDialogTitle>
             Switch to <code className="font-medium">{props.threadBranch}</code>?
           </AlertDialogTitle>
-          <AlertDialogDescription>
-            You have uncommitted changes. They'll carry over to the other branch, or block the
-            switch if they conflict.
-          </AlertDialogDescription>
+          <AlertDialogDescription>{props.refSwitchChangesDescription}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
@@ -170,11 +172,12 @@ export function BranchRestoreConfirmHost(props: {
             variant="default"
             disabled={!props.canWriteSourceControl}
             onClick={() => {
+              if (!props.canWriteSourceControl) return;
               closeThreadOverlay(branchRestoreConfirmAtom);
               props.onConfirm();
             }}
           >
-            Switch branch
+            Switch {props.refNoun}
           </Button>
         </AlertDialogFooter>
       </AlertDialogPopup>
@@ -197,6 +200,7 @@ export function RevertConfirmHost(props: {
   readonly threadKey: string;
   readonly checkpoints: OrchestrationV2ThreadProjection["checkpoints"] | undefined;
   readonly worktreePath: string | null;
+  readonly vcsActionsSupported?: boolean;
   readonly onConfirm: (turnCount: number, messageId: MessageId, restoreFiles: boolean) => void;
 }) {
   const pending = useThreadOverlay(revertConfirmAtom, props.threadKey);
@@ -206,7 +210,11 @@ export function RevertConfirmHost(props: {
     props.worktreePath !== null &&
     findRevertCheckpoint(props.checkpoints ?? [], pending.turnCount)?.status === "ready";
   const confirm = (restoreFiles: boolean) => {
-    if (pending === null || (restoreFiles && !canRestoreFiles)) return;
+    if (
+      pending === null ||
+      (restoreFiles && (!canRestoreFiles || props.vcsActionsSupported === false))
+    )
+      return;
     closeThreadOverlay(revertConfirmAtom);
     props.onConfirm(pending.turnCount, pending.messageId, restoreFiles);
   };
@@ -229,7 +237,7 @@ export function RevertConfirmHost(props: {
           <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
           <Button
             variant="destructive-outline"
-            disabled={!canRestoreFiles}
+            disabled={!canRestoreFiles || props.vcsActionsSupported === false}
             onClick={() => confirm(true)}
           >
             Revert files too
