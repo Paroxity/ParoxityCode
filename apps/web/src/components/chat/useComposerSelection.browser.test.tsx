@@ -85,6 +85,7 @@ function Picker(props: {
     draftThread: null,
     activeThread: props.thread,
     activeRuntime: props.runtime,
+    vcsActionsSupported: true,
     activeProjectSettings: { settings: { newWorktreesStartFromOrigin: false } },
     settings: DEFAULT_UNIFIED_SETTINGS,
     providerStatuses: providers,

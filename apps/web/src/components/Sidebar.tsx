@@ -2,6 +2,7 @@ import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { m } from "../i18n/messages";
 import { attachSidebarTree } from "../lib/sidebarTree";
+import { vcsEnvironment } from "../state/vcs";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import {
@@ -15,6 +16,9 @@ import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
+import { AsyncResult } from "effect/reactivity";
+import { resolveVcsTerminology, type VcsTerminology } from "@t3tools/shared/vcs";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
   DndContext,
   useSensor,
@@ -162,7 +166,6 @@ import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../state/older
 import { useThreadSearch } from "../state/queries";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
-import { appAtomRegistry } from "../rpc/atomRegistry";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
 import {
@@ -2569,12 +2572,25 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const workspacePath =
           session.worktreePath ??
           projectByKey.get(`${session.environmentId}:${session.projectId}`)?.workspaceRoot;
+        const vcsStatus = workspacePath
+          ? Option.getOrNull(
+              AsyncResult.value(
+                appAtomRegistry.get(
+                  vcsEnvironment.status({
+                    environmentId: session.environmentId,
+                    input: { cwd: workspacePath, includeRemote: false },
+                  }),
+                ),
+              ),
+            )
+          : null;
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildDraftActionMenuItems({
               hasPath: Boolean(workspacePath),
               hasBranch: Boolean(session.branch),
               hasProject: projectGroup != null,
+              terminology: resolveVcsTerminology(vcsStatus),
             }),
             position,
             source,
@@ -2611,6 +2627,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       threadRef: ScopedThreadRef,
       position: { x: number; y: number },
       source: ContextMenuSource,
+      rowTerminology: VcsTerminology | null,
       fromSearch = false,
     ) => {
       void (async () => {
@@ -2636,6 +2653,23 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           thread.worktreePath ??
           projectByKey.get(`${thread.environmentId}:${thread.projectId}`)?.workspaceRoot ??
           null;
+        // Search results have no row status, so read the cached one for their workspace.
+        const terminology =
+          rowTerminology ??
+          resolveVcsTerminology(
+            threadWorkspacePath
+              ? Option.getOrNull(
+                  AsyncResult.value(
+                    appAtomRegistry.get(
+                      vcsEnvironment.status({
+                        environmentId: thread.environmentId,
+                        input: { cwd: threadWorkspacePath, includeRemote: false },
+                      }),
+                    ),
+                  ),
+                )
+              : null,
+          );
         const configLoaded = serverConfigs.has(thread.environmentId);
         const supportsAutoSettleOptOut =
           serverConfigs.get(thread.environmentId)?.environment.capabilities
@@ -2673,6 +2707,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       isActive: projectScopeKeys.includes(threadProjectGroup.projectKey),
                     }
                   : null,
+              terminology,
               isPinned,
               isSettled,
               autoSettleEnabled: thread.autoSettleDisabledAt == null,
@@ -2913,7 +2948,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
   const handleSearchResultContextMenu = useStableCallback(
     (threadRef: ScopedThreadRef, position: { x: number; y: number }, source: ContextMenuSource) =>
-      handleThreadContextMenu(threadRef, position, source, true),
+      handleThreadContextMenu(threadRef, position, source, null, true),
   );
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to window keydown for thread navigation shortcuts using the current thread list

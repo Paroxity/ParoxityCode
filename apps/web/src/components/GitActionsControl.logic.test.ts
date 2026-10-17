@@ -1,6 +1,7 @@
 import { SourceControlProviderKind, type VcsStatusResult } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { resolveAutoFeatureBranchName } from "@t3tools/shared/git";
+import { JJ_VCS_TERMINOLOGY } from "@t3tools/shared/vcs";
 import { assert, describe, it } from "vite-plus/test";
 import {
   buildMenuItems,
@@ -34,6 +35,75 @@ function status(overrides: Partial<VcsStatusResult> = {}): VcsStatusResult {
     ...overrides,
   };
 }
+
+describe("jj wording and unsupported repositories", () => {
+  it("offers a push that replaces the bookmark's earlier pushed versions", () => {
+    const amended = status({
+      vcs: { kind: "jj" },
+      aheadCount: 2,
+      rewritesUpstream: true,
+      pr: {
+        number: 1,
+        title: "Stack",
+        url: "https://github.com/a/b/pull/1",
+        state: "open",
+        baseRef: "main",
+        headRef: "feature/test",
+      },
+    });
+    assert.deepEqual(resolveQuickAction(amended, false), {
+      label: "Push rewrite",
+      disabled: false,
+      kind: "run_action",
+      action: "push",
+    });
+  });
+
+  it("names why a dirty jj Push is disabled instead of the working-copy changes", () => {
+    const dirty = status({
+      hasWorkingTreeChanges: true,
+      aheadCount: 0,
+      vcs: { kind: "jj" },
+    });
+    const push = buildMenuItems(dirty, false).find((item) => item.id === "push")!;
+    assert.equal(
+      getMenuActionDisabledReason({
+        item: push,
+        gitStatus: dirty,
+        isBusy: false,
+        hasPrimaryRemote: true,
+      }),
+      "No local changes to push.",
+    );
+  });
+
+  it("blocks every action when jj is unsupported", () => {
+    const unsupported = status({
+      hasWorkingTreeChanges: true,
+      aheadCount: 1,
+      vcs: { kind: "jj", unsupportedReason: "Jujutsu is unavailable." },
+    });
+    assert.isTrue(buildMenuItems(unsupported, false).every((item) => item.disabled));
+    assert.deepInclude(resolveQuickAction(unsupported, false), {
+      disabled: true,
+      kind: "show_hint",
+      hint: "Jujutsu is unavailable.",
+    });
+  });
+
+  it("retains jj bookmark wording in default-ref confirmation", () => {
+    assert.equal(
+      resolveDefaultBranchActionDialogCopy({
+        action: "push",
+        branchName: "main",
+        includesCommit: false,
+        terminology: sourceControlClients.get(undefined).changeRequest,
+        vcsTerminology: JJ_VCS_TERMINOLOGY,
+      }).title,
+      "Push to default bookmark?",
+    );
+  });
+});
 
 function pushDisabledReason(gitStatus: VcsStatusResult): string | null {
   const item = buildMenuItems(gitStatus, false).find((menuItem) => menuItem.id === "push");

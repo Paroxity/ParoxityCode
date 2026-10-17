@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { msg, useGT, useMessages } from "gt-react";
+import { GIT_VCS_TERMINOLOGY, JJ_VCS_TERMINOLOGY } from "@t3tools/shared/vcs";
 import {
   CheckIcon,
   ChevronLeftIcon,
@@ -55,6 +56,8 @@ interface ComposerPrimaryActionsProps {
   sendDisabledReason: string | null;
   isEnvironmentUnavailable: boolean;
   isPreparingWorktree: boolean;
+  /** The project's VCS noun for a worktree; Git's is the fallback while status is unknown. */
+  workspaceNoun?: string;
   hasSendableContent: boolean;
   canResume?: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
@@ -247,6 +250,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   sendDisabledReason,
   isEnvironmentUnavailable,
   isPreparingWorktree,
+  workspaceNoun = GIT_VCS_TERMINOLOGY.workspaceNoun,
   hasSendableContent,
   canResume = false,
   preserveComposerFocusOnPointerDown = false,
@@ -401,7 +405,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     ? gt("Environment disconnected")
     : (sendDisabledReason ??
       (isPreparingWorktree
-        ? gt("Preparing worktree")
+        ? workspaceNoun === JJ_VCS_TERMINOLOGY.workspaceNoun
+          ? gt("Preparing workspace")
+          : gt("Preparing worktree")
         : isSendBusy
           ? isEditingQueuedMessage
             ? gt("Updating queued message")

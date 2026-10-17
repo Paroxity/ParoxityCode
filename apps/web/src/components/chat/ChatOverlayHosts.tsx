@@ -6,6 +6,7 @@ import type {
   ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
+import type { VcsTerminology } from "@t3tools/shared/vcs";
 import { useAtomValue } from "@effect/atom-react";
 import { T, Var } from "gt-react";
 import { Atom } from "effect/reactivity";
@@ -75,6 +76,7 @@ export function PullRequestThreadDialogHost(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly cwd: string | null;
+  readonly vcsActionsSupported?: boolean;
   readonly onPrepared: (input: {
     branch: string;
     worktreePath: string | null;
@@ -82,7 +84,7 @@ export function PullRequestThreadDialogHost(props: {
   }) => Promise<void> | void;
 }) {
   const state = useThreadOverlay(pullRequestThreadDialogAtom, props.threadKey);
-  if (state === null) return null;
+  if (state === null || props.vcsActionsSupported === false) return null;
   return (
     <PullRequestThreadDialog
       key={state.key}
@@ -94,7 +96,9 @@ export function PullRequestThreadDialogHost(props: {
       onOpenChange={(open) => {
         if (!open) closeThreadOverlay(pullRequestThreadDialogAtom);
       }}
-      onPrepared={props.onPrepared}
+      onPrepared={(input) => {
+        if (props.vcsActionsSupported !== false) return props.onPrepared(input);
+      }}
     />
   );
 }
@@ -145,9 +149,11 @@ export function BranchRestoreConfirmHost(props: {
   readonly threadKey: string | null;
   readonly threadBranch: string;
   readonly canWriteSourceControl: boolean;
+  readonly terminology: VcsTerminology;
   readonly onConfirm: () => void;
 }) {
   const open = useThreadOverlay(branchRestoreConfirmAtom, props.threadKey) !== null;
+  const jj = props.terminology.kind === "jj";
   return (
     <AlertDialog
       open={open}
@@ -167,10 +173,18 @@ export function BranchRestoreConfirmHost(props: {
             </T>
           </AlertDialogTitle>
           <AlertDialogDescription>
-            <T>
-              You have uncommitted changes. They'll carry over to the other branch, or block the
-              switch if they conflict.
-            </T>
+            {jj ? (
+              <T>
+                You have working copy changes. They'll stay in the current change when you switch
+                bookmarks. The switch may be refused if it would leave that change without a
+                bookmark.
+              </T>
+            ) : (
+              <T>
+                You have uncommitted changes. They'll carry over to the other branch, or block the
+                switch if they conflict.
+              </T>
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -181,11 +195,12 @@ export function BranchRestoreConfirmHost(props: {
             variant="default"
             disabled={!props.canWriteSourceControl}
             onClick={() => {
+              if (!props.canWriteSourceControl) return;
               closeThreadOverlay(branchRestoreConfirmAtom);
               props.onConfirm();
             }}
           >
-            <T>Switch branch</T>
+            {jj ? <T>Switch bookmark</T> : <T>Switch branch</T>}
           </Button>
         </AlertDialogFooter>
       </AlertDialogPopup>
@@ -208,6 +223,7 @@ export function RevertConfirmHost(props: {
   readonly threadKey: string;
   readonly checkpoints: OrchestrationV2ThreadProjection["checkpoints"] | undefined;
   readonly worktreePath: string | null;
+  readonly vcsActionsSupported?: boolean;
   readonly onConfirm: (turnCount: number, messageId: MessageId, restoreFiles: boolean) => void;
 }) {
   const pending = useThreadOverlay(revertConfirmAtom, props.threadKey);
@@ -217,7 +233,11 @@ export function RevertConfirmHost(props: {
     props.worktreePath !== null &&
     findRevertCheckpoint(props.checkpoints ?? [], pending.turnCount)?.status === "ready";
   const confirm = (restoreFiles: boolean) => {
-    if (pending === null || (restoreFiles && !canRestoreFiles)) return;
+    if (
+      pending === null ||
+      (restoreFiles && (!canRestoreFiles || props.vcsActionsSupported === false))
+    )
+      return;
     closeThreadOverlay(revertConfirmAtom);
     props.onConfirm(pending.turnCount, pending.messageId, restoreFiles);
   };
@@ -246,7 +266,7 @@ export function RevertConfirmHost(props: {
           </AlertDialogClose>
           <Button
             variant="destructive-outline"
-            disabled={!canRestoreFiles}
+            disabled={!canRestoreFiles || props.vcsActionsSupported === false}
             onClick={() => confirm(true)}
           >
             <T>Revert files too</T>
