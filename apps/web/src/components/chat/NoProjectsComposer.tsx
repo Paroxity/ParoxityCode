@@ -11,6 +11,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { GIT_VCS_TERMINOLOGY } from "@t3tools/shared/vcs";
 import { useNavigate } from "@tanstack/react-router";
 import { useGT } from "gt-react";
 import { useEffect, useRef, useState } from "react";
@@ -154,6 +155,7 @@ export function NoProjectsComposer({
           composerDraftTarget={NO_PROJECTS_DRAFT_ID}
           environmentId={environmentId}
           canOperateThread={canOperateThread}
+          workspaceNoun={GIT_VCS_TERMINOLOGY.workspaceNoun}
           // A first thread has no history to compact.
           canSteer={true}
           resumeCompactionTokens={null}

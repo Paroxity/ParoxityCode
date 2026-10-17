@@ -1,6 +1,7 @@
 import { toServerClock } from "@t3tools/client-runtime/clock";
 import type { EnvironmentId, WorktreeSetupSnapshot, WorktreeSetupStage } from "@t3tools/contracts";
 import { formatDuration } from "@t3tools/shared/orchestrationTimingCopy";
+import type { VcsTerminology } from "@t3tools/shared/vcs";
 import { msg, T, useGT, useMessages } from "gt-react";
 import {
   BrainIcon,
@@ -81,6 +82,7 @@ const stopped = (stage: WorktreeSetupStage, snapshot: WorktreeSetupSnapshot) =>
 function stageLabel(
   stage: WorktreeSetupStage,
   snapshot: WorktreeSetupSnapshot,
+  terminology: VcsTerminology,
   resolve: MessageResolver,
 ): string {
   const tense = stopped(stage, snapshot)
@@ -102,12 +104,19 @@ function stageLabel(
               { tense, ref: baseRef },
             ),
           )
-        : resolve(
-            msg(
-              "{tense, select, running {Fetching base branch} failed {Couldn't fetch base branch} stopped {Stopped fetching base branch} other {Fetched base branch}}",
-              { tense },
-            ),
-          );
+        : terminology.kind === "jj"
+          ? resolve(
+              msg(
+                "{tense, select, running {Fetching base bookmark} failed {Couldn't fetch base bookmark} stopped {Stopped fetching base bookmark} other {Fetched base bookmark}}",
+                { tense },
+              ),
+            )
+          : resolve(
+              msg(
+                "{tense, select, running {Fetching base branch} failed {Couldn't fetch base branch} stopped {Stopped fetching base branch} other {Fetched base branch}}",
+                { tense },
+              ),
+            );
     case "checkout":
       return branch
         ? resolve(
@@ -295,16 +304,18 @@ function StageRow({
   environmentId,
   stage,
   snapshot,
+  terminology,
   onOpenTerminal,
 }: {
   environmentId: EnvironmentId | undefined;
   stage: WorktreeSetupStage;
   snapshot: WorktreeSetupSnapshot;
+  terminology: VcsTerminology;
   onOpenTerminal: (() => void) | null;
 }) {
   const m = useMessages();
   const icon = STAGE_ICONS[stage.id];
-  const label = stageLabel(stage, snapshot, m);
+  const label = stageLabel(stage, snapshot, terminology, m);
   const terminal =
     stage.id === "setup-script" && onOpenTerminal ? (
       <InlineButton
@@ -374,12 +385,14 @@ const shownStage = (stage: WorktreeSetupStage, snapshot: WorktreeSetupSnapshot) 
 export function WorktreeSetupRows({
   environmentId,
   snapshot,
+  terminology,
   startingLabel = null,
   onOpenTerminal,
 }: {
   /** The thread's environment, whose clock live timers count on. */
   environmentId?: EnvironmentId | undefined;
   snapshot: WorktreeSetupSnapshot;
+  terminology: VcsTerminology;
   /** The provider still launching after setup, shown as the turn's live row. */
   startingLabel?: string | null;
   onOpenTerminal: (() => void) | null;
@@ -398,12 +411,13 @@ export function WorktreeSetupRows({
       environmentId={environmentId}
       stage={stage}
       snapshot={snapshot}
+      terminology={terminology}
       onOpenTerminal={onOpenTerminal}
     />
   ));
   return (
     <section
-      aria-label={gt("Worktree setup")}
+      aria-label={terminology.kind === "jj" ? gt("Workspace setup") : gt("Worktree setup")}
       data-worktree-setup-phase={snapshot.phase}
       className="flex min-w-0 flex-col gap-1"
     >
@@ -412,9 +426,13 @@ export function WorktreeSetupRows({
           data-worktree-setup-stage="summary"
           icon={FolderGit2Icon}
           label={
-            snapshot.branch
-              ? gt("Set up worktree {branch}", { branch: snapshot.branch })
-              : gt("Set up worktree")
+            terminology.kind === "jj"
+              ? snapshot.branch
+                ? gt("Set up workspace {branch}", { branch: snapshot.branch })
+                : gt("Set up workspace")
+              : snapshot.branch
+                ? gt("Set up worktree {branch}", { branch: snapshot.branch })
+                : gt("Set up worktree")
           }
           trailing={
             <Elapsed

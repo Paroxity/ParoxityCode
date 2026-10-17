@@ -1,6 +1,7 @@
 import { msg, useGT, useMessages } from "gt-react";
 import { useRef } from "react";
 import { BranchNamingMode, DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import type { VcsTerminology } from "@t3tools/shared/vcs";
 
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -20,10 +21,11 @@ const MODES = {
   custom: msg("Custom instructions"),
 } satisfies Record<BranchNamingMode, string>;
 
-export function BranchNamingSettings() {
+export function BranchNamingSettings({ terminology }: { terminology: VcsTerminology }) {
   const searchableSetting = useSearchableSetting();
   const gt = useGT();
   const m = useMessages();
+  const jj = terminology.kind === "jj";
   const settings = useScopedSettings();
   const { targets } = useSettingsScope();
   const scopeKey = targets.map((target) => `${target.environmentId}:${target.projectId}`).join(",");
@@ -40,7 +42,12 @@ export function BranchNamingSettings() {
         serverScoped
         settingKeys={["branchNamingMode"]}
         {...searchableSetting("worktree-branch-naming")}
-        description={gt("Choose how new worktree branches are named from your first message.")}
+        {...(jj ? { title: gt("Workspace bookmark naming") } : {})}
+        description={
+          jj
+            ? gt("Choose how new workspace bookmarks are named from your first message.")
+            : gt("Choose how new worktree branches are named from your first message.")
+        }
         status={
           !modeMixed && settings.branchNamingMode === "semantic"
             ? gt(
@@ -51,7 +58,9 @@ export function BranchNamingSettings() {
         resetAction={
           settings.branchNamingMode !== DEFAULT_SERVER_SETTINGS.branchNamingMode || modeMixed ? (
             <SettingResetButton
-              ariaLabel={gt("Reset branch naming to default")}
+              ariaLabel={
+                jj ? gt("Reset bookmark naming to default") : gt("Reset branch naming to default")
+              }
               onClick={() =>
                 updateSettings({ branchNamingMode: DEFAULT_SERVER_SETTINGS.branchNamingMode })
               }
@@ -67,7 +76,11 @@ export function BranchNamingSettings() {
               }
             }}
           >
-            <SelectTrigger variant="well" size="compact" aria-label={gt("Worktree branch naming")}>
+            <SelectTrigger
+              variant="well"
+              size="compact"
+              aria-label={jj ? gt("Workspace bookmark naming") : gt("Worktree branch naming")}
+            >
               <SelectValue>
                 {(value: BranchNamingMode | null) =>
                   value === null
@@ -90,7 +103,7 @@ export function BranchNamingSettings() {
         <SettingsRow
           serverScoped
           settingKeys={["branchNamePrefix"]}
-          title={gt("Branch prefix")}
+          title={jj ? gt("Bookmark prefix") : gt("Branch prefix")}
           description={gt(
             "For example, t3 or t3/ produces t3/add-search. Leave empty for no prefix.",
           )}
@@ -98,7 +111,9 @@ export function BranchNamingSettings() {
             prefixMixed ||
             settings.branchNamePrefix !== DEFAULT_SERVER_SETTINGS.branchNamePrefix ? (
               <SettingResetButton
-                ariaLabel={gt("Reset branch prefix to default")}
+                ariaLabel={
+                  jj ? gt("Reset bookmark prefix to default") : gt("Reset branch prefix to default")
+                }
                 onClick={() =>
                   updateSettings({ branchNamePrefix: DEFAULT_SERVER_SETTINGS.branchNamePrefix })
                 }
@@ -109,7 +124,7 @@ export function BranchNamingSettings() {
             <Input
               size="settings"
               key={`${scopeKey}:${prefixMixed}:${settings.branchNamePrefix}`}
-              aria-label={gt("Branch prefix")}
+              aria-label={jj ? gt("Bookmark prefix") : gt("Branch prefix")}
               autoCapitalize="none"
               spellCheck={false}
               onChange={() => {
@@ -135,14 +150,24 @@ export function BranchNamingSettings() {
         <SettingsRow
           serverScoped
           settingKeys={["branchNameInstructions"]}
-          title={gt("Branch naming instructions")}
-          description={gt(
-            "Appended to the naming prompt. The model returns the complete branch name; no prefix or suffix is added.",
-          )}
+          title={jj ? gt("Bookmark naming instructions") : gt("Branch naming instructions")}
+          description={
+            jj
+              ? gt(
+                  "Appended to the naming prompt. The model returns the complete bookmark name; no prefix or suffix is added.",
+                )
+              : gt(
+                  "Appended to the naming prompt. The model returns the complete branch name; no prefix or suffix is added.",
+                )
+          }
           resetAction={
             instructionsMixed || settings.branchNameInstructions !== "" ? (
               <SettingResetButton
-                ariaLabel={gt("Reset branch naming instructions to default")}
+                ariaLabel={
+                  jj
+                    ? gt("Reset bookmark naming instructions to default")
+                    : gt("Reset branch naming instructions to default")
+                }
                 onClick={() => updateSettings({ branchNameInstructions: "" })}
               />
             ) : null
@@ -151,7 +176,9 @@ export function BranchNamingSettings() {
           <div className="mt-3 max-w-2xl pb-3.5">
             <Textarea
               key={`${scopeKey}:${instructionsMixed}:${settings.branchNameInstructions}`}
-              aria-label={gt("Branch naming instructions")}
+              aria-label={
+                jj ? gt("Bookmark naming instructions") : gt("Branch naming instructions")
+              }
               onChange={() => {
                 instructionsEdited.current = true;
               }}

@@ -37,6 +37,7 @@ import { commandForProjectScript, primaryProjectScript } from "~/projectScripts"
 import { shortcutLabelForCommand } from "~/keybindings";
 import { serverEnvironment } from "~/state/server";
 import { readEnvironmentScope } from "~/state/session";
+import { useVcsTerminology } from "~/state/vcs";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
   editorRequestForScript,
@@ -94,6 +95,7 @@ interface ProjectScriptsControlProps {
   onRequestMenuClose?: () => void;
   environmentId: EnvironmentId;
   threadId?: ThreadId;
+  workspaceRoot?: string | null;
   scripts: ReadonlyArray<ProjectScript>;
   fileScripts?: ReadonlyArray<T3ProjectFileScript>;
   preferredScriptId?: string | null;
@@ -112,6 +114,7 @@ export default function ProjectScriptsControl({
   onRequestMenuClose,
   environmentId,
   threadId,
+  workspaceRoot = null,
   scripts,
   fileScripts = NO_FILE_SCRIPTS,
   preferredScriptId = null,
@@ -122,6 +125,7 @@ export default function ProjectScriptsControl({
 }: ProjectScriptsControlProps) {
   const gt = useGT();
   const messages = useMessages();
+  const vcsTerminology = useVcsTerminology(environmentId, workspaceRoot);
   const isPanel = displayMode === "panel";
   const servers = useThreadDiscoveredPorts({ environmentId, threadId: threadId ?? null });
   const stopServer = useAtomCommand(previewEnvironment.stopLocalServer, {
@@ -626,6 +630,7 @@ export default function ProjectScriptsControl({
 
       <ProjectScriptEditorDialog
         environmentId={environmentId}
+        workspaceNoun={vcsTerminology.workspaceNoun}
         request={editorRequest}
         scripts={scripts}
         onSubmit={submitScript}

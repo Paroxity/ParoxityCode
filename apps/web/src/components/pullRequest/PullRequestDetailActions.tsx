@@ -7,6 +7,7 @@ import {
 import { CheckIcon, FolderGit2Icon, GitBranchIcon, RotateCcwIcon, Trash2Icon } from "lucide-react";
 import { T, useGT, useMessages } from "gt-react";
 import type { ReactNode } from "react";
+import type { VcsTerminology } from "@t3tools/shared/vcs";
 import { cn } from "~/lib/utils";
 import {
   PULL_REQUEST_MERGE_METHOD_LABELS,
@@ -97,12 +98,14 @@ export function PullRequestResolveConflictsButton({
 }
 
 export function PullRequestCheckoutMenuItems({
+  vcsTerminology,
   handoff,
   checkoutRoot,
   canPrepareWorktree,
   canCheckoutHere,
   onCheckout,
 }: {
+  vcsTerminology: VcsTerminology;
   handoff: string | null;
   checkoutRoot: string | null;
   canPrepareWorktree: boolean;
@@ -121,7 +124,9 @@ export function PullRequestCheckoutMenuItems({
           <span>
             {handoff === "checkout:worktree"
               ? gt("Checking out...")
-              : gt("Check out in a worktree")}
+              : vcsTerminology.kind === "jj"
+                ? gt("Check out in a workspace")
+                : gt("Check out in a worktree")}
           </span>
           <span className="text-meta text-muted-foreground">
             <T>Its own folder and thread. Nothing you have open moves.</T>
