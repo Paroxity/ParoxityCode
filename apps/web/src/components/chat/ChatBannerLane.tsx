@@ -23,10 +23,12 @@ import {
   resolveLowLimitSwitchTarget,
 } from "./ComposerUsageLimits";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
+import { useVcsFallbackNoticeItem, type VcsFallbackNoticeInput } from "../VcsFallbackNotice";
 
 /** Provider, run-error, and limit notices share the composer's tray status line. */
 export function useChatBannerLane(input: {
   readonly environmentId: EnvironmentId;
+  readonly vcsFallbackNotice?: VcsFallbackNoticeInput | null;
   /** The server's reason this checkout's VCS cannot be used, shown as is. */
   readonly vcsUnsupportedReason?: string | null;
   readonly activeProviderStatus: ServerProvider | null;
@@ -90,7 +92,9 @@ export function useChatBannerLane(input: {
     lowLimitVisible && activeProviderStatus !== null && canSwitchProvider
       ? resolveLowLimitSwitchTarget(activeProviderStatus, providerStatuses)
       : null;
+  const fallbackItem = useVcsFallbackNoticeItem(input.vcsFallbackNotice ?? null);
   const items: ComposerBannerStackItem[] = [];
+  if (fallbackItem) items.push(fallbackItem);
   if (input.vcsUnsupportedReason) {
     items.push({
       id: "vcs-unsupported",
