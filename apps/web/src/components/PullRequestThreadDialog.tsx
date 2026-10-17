@@ -3,11 +3,11 @@ import {
   type EnvironmentId,
   type ThreadId,
 } from "@t3tools/contracts";
+import { vcsOperationErrorMessage } from "@t3tools/client-runtime/errors";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m } from "../i18n/messages";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useRef, useState } from "react";
@@ -24,6 +24,11 @@ import { parsePullRequestReference } from "@t3tools/client-runtime/pull-request-
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { useEnvironmentQuery } from "~/state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
+import {
+  resolveVcsTerminology,
+  resolveVcsUnsupportedReason,
+  supportsVcsActions,
+} from "@t3tools/shared/vcs";
 import { vcsEnvironment } from "~/state/vcs";
 import { offHeadPullRequestCheckoutToast } from "./pullRequest/pullRequestCheckoutToast";
 import { Button } from "./ui/button";
@@ -100,6 +105,8 @@ export function PullRequestThreadDialog({
   const sourceControlPresentation = getSourceControlPresentation(gitStatus?.sourceControlProvider);
   const terminology = sourceControlPresentation.terminology;
   const term = changeRequestTermKind(terminology);
+  const vcsTerminology = resolveVcsTerminology(gitStatus);
+  const vcsActionsSupported = supportsVcsActions(gitStatus);
   const SourceControlIcon = sourceControlPresentation.Icon;
 
   const parsedReference = parsePullRequestReference(reference);
@@ -135,7 +142,7 @@ export function PullRequestThreadDialog({
   const statusTone = pullRequestStatusTone(resolvedPullRequest?.state);
 
   const handleConfirm = async (mode: "local" | "worktree") => {
-    if (!preparePullRequestThreadAction.isAllowed) return;
+    if (!vcsActionsSupported || !preparePullRequestThreadAction.isAllowed) return;
     if (
       mode === "worktree" &&
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
@@ -162,12 +169,14 @@ export function PullRequestThreadDialog({
         const error = squashAtomCommandFailure(result);
         setCheckoutError({
           target: checkoutTarget,
-          message:
-            thrownErrorMessage(error, m) ??
+          message: vcsOperationErrorMessage(
+            error,
             gt(
               "Failed to prepare {term, select, mr {merge request} cr {change request} other {pull request}} thread.",
               { term },
             ),
+            m,
+          ),
         });
       }
       return;
@@ -197,6 +206,7 @@ export function PullRequestThreadDialog({
           )
         : null;
   const errorMessage =
+    resolveVcsUnsupportedReason(gitStatus) ??
     validationMessage ??
     (checkoutError?.target === checkoutTarget ? checkoutError.message : null) ??
     (resolvedPullRequest === null ? pullRequestResolution.error : null);
@@ -323,6 +333,7 @@ export function PullRequestThreadDialog({
             variant="outline"
             onClick={() => handleConfirm("local")}
             disabled={
+              !vcsActionsSupported ||
               !preparePullRequestThreadAction.isAllowed ||
               !cwd ||
               !resolvedPullRequest ||
@@ -339,6 +350,7 @@ export function PullRequestThreadDialog({
             size="sm"
             onClick={() => handleConfirm("worktree")}
             disabled={
+              !vcsActionsSupported ||
               !preparePullRequestThreadAction.isAllowed ||
               !canOperateThread ||
               !cwd ||
@@ -348,8 +360,12 @@ export function PullRequestThreadDialog({
             }
           >
             {preparingMode === "worktree"
-              ? gt("Preparing worktree...")
-              : gt("Worktree", { $context: "checkout in a new git worktree" })}
+              ? vcsTerminology.kind === "jj"
+                ? gt("Preparing workspace...")
+                : gt("Preparing worktree...")
+              : vcsTerminology.kind === "jj"
+                ? gt("Workspace", { $context: "checkout in a new jj workspace" })
+                : gt("Worktree", { $context: "checkout in a new git worktree" })}
           </Button>
         </DialogFooter>
       </DialogPopup>

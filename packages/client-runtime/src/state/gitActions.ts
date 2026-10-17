@@ -3,6 +3,7 @@ import type {
   GitStackedAction,
   VcsStatusResult,
 } from "@t3tools/contracts";
+import { resolveVcsUnsupportedReason, type VcsTerminology } from "@t3tools/shared/vcs";
 import { type ChangeRequestTerminology, sourceControlClients } from "../sourceControlClients.ts";
 import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
@@ -65,22 +66,25 @@ export function buildMenuItems(
   const hasOpenPr = gitStatus.pr?.state === "open";
   const isBehind = gitStatus.behindCount > 0;
   const canPushWithoutUpstream = hasOriginRemote && !gitStatus.hasUpstream;
-  const canCommit = !isBusy && hasChanges;
+  const blocked = isBusy || resolveVcsUnsupportedReason(gitStatus) !== null;
+  const canCommit = !blocked && hasChanges;
   const canPush =
-    !isBusy &&
+    !blocked &&
     hasBranch &&
     !hasChanges &&
     !isBehind &&
     gitStatus.aheadCount > 0 &&
     (gitStatus.hasUpstream || canPushWithoutUpstream);
   const canCreatePr =
-    !isBusy &&
+    !blocked &&
     hasBranch &&
     !hasOpenPr &&
+    // jj pushes the bookmark's change, so working-copy edits would be left out of the request.
+    !(gitStatus.vcs?.kind === "jj" && hasChanges) &&
     (gitStatus.aheadOfDefaultCount ?? gitStatus.aheadCount) > 0 &&
     !isBehind &&
     (gitStatus.hasUpstream || canPushWithoutUpstream);
-  const canOpenPr = !isBusy && hasOpenPr;
+  const canOpenPr = !blocked && hasOpenPr;
 
   return [
     {
@@ -125,12 +129,15 @@ export function resolveQuickAction(
   hasOriginRemote = true,
   resolve: MFunctionType = mFallback,
 ): GitQuickAction {
+  const jj = gitStatus?.vcs?.kind === "jj";
   if (isBusy) {
     return {
       label: resolve(msg("Commit", { $context: "verb, git action" })),
       disabled: true,
       kind: "show_hint",
-      hint: resolve(msg("Git action in progress.")),
+      hint: jj
+        ? resolve(msg("Jujutsu action in progress."))
+        : resolve(msg("Git action in progress.")),
     };
   }
 
@@ -140,6 +147,16 @@ export function resolveQuickAction(
       disabled: true,
       kind: "show_hint",
       hint: resolve(msg("Git status is unavailable.")),
+    };
+  }
+
+  const unsupportedReason = resolveVcsUnsupportedReason(gitStatus);
+  if (unsupportedReason !== null) {
+    return {
+      label: resolve(msg("Commit", { $context: "verb, git action" })),
+      disabled: true,
+      kind: "show_hint",
+      hint: unsupportedReason,
     };
   }
 
@@ -157,15 +174,21 @@ export function resolveQuickAction(
       label: resolve(msg("Commit", { $context: "verb, git action" })),
       disabled: true,
       kind: "show_hint",
-      hint: resolve(
-        msg(
-          "{kind, select, pr {Create and checkout a branch before pushing or opening a PR.} mr {Create and checkout a branch before pushing or opening an MR.} generic {Create and checkout a branch before pushing or opening a change request.} other {Create and checkout a branch before pushing or opening {changeRequest}.}}",
-          {
-            kind: changeRequestKind(terminology),
-            changeRequest: terminology.shortLabelWithArticle,
-          },
-        ),
-      ),
+      hint: jj
+        ? resolve(
+            msg("No bookmark here: create one before pushing or opening {changeRequest}.", {
+              changeRequest: terminology.shortLabelWithArticle,
+            }),
+          )
+        : resolve(
+            msg(
+              "{kind, select, pr {Create and checkout a branch before pushing or opening a PR.} mr {Create and checkout a branch before pushing or opening an MR.} generic {Create and checkout a branch before pushing or opening a change request.} other {Create and checkout a branch before pushing or opening {changeRequest}.}}",
+              {
+                kind: changeRequestKind(terminology),
+                changeRequest: terminology.shortLabelWithArticle,
+              },
+            ),
+          ),
     };
   }
 
@@ -230,7 +253,9 @@ export function resolveQuickAction(
         label: resolve(msg("Push", { $context: "verb, git action" })),
         disabled: true,
         kind: "show_hint",
-        hint: resolve(msg("No local commits to push.")),
+        hint: jj
+          ? resolve(msg("No local changes to push."))
+          : resolve(msg("No local commits to push.")),
       };
     }
     if (hasOpenPr || isDefaultBranch) {
@@ -251,10 +276,12 @@ export function resolveQuickAction(
 
   if (isDiverged) {
     return {
-      label: resolve(msg("Sync branch")),
+      label: jj ? resolve(msg("Sync bookmark")) : resolve(msg("Sync branch")),
       disabled: true,
       kind: "show_hint",
-      hint: resolve(msg("Branch has diverged from upstream. Rebase/merge first.")),
+      hint: jj
+        ? resolve(msg("Bookmark has diverged from upstream. Rebase/merge first."))
+        : resolve(msg("Branch has diverged from upstream. Rebase/merge first.")),
     };
   }
 
@@ -304,7 +331,9 @@ export function resolveQuickAction(
     label: resolve(msg("Commit", { $context: "verb, git action" })),
     disabled: true,
     kind: "show_hint",
-    hint: resolve(msg("Branch is up to date. No action needed.")),
+    hint: jj
+      ? resolve(msg("Bookmark is up to date. No action needed."))
+      : resolve(msg("Branch is up to date. No action needed.")),
   };
 }
 
@@ -318,9 +347,16 @@ export function getGitActionDisabledReason(
   resolve: MFunctionType = mFallback,
 ): string | null {
   const { item, gitStatus, isBusy, hasOriginRemote } = input;
+  const jj = gitStatus?.vcs?.kind === "jj";
   if (!item.disabled) return null;
-  if (isBusy) return resolve(msg("Git action in progress."));
+  if (isBusy) {
+    return jj
+      ? resolve(msg("Jujutsu action in progress."))
+      : resolve(msg("Git action in progress."));
+  }
   if (!gitStatus) return resolve(msg("Git status is unavailable."));
+  const unsupportedReason = resolveVcsUnsupportedReason(gitStatus);
+  if (unsupportedReason !== null) return unsupportedReason;
 
   const hasBranch = gitStatus.refName !== null;
   const hasChanges = gitStatus.hasWorkingTreeChanges;
@@ -331,26 +367,36 @@ export function getGitActionDisabledReason(
 
   if (item.id === "commit") {
     if (!hasChanges) {
-      return resolve(msg("Worktree is clean. Make changes before committing."));
+      return jj
+        ? resolve(msg("Workspace is clean. Make changes before committing."))
+        : resolve(msg("Worktree is clean. Make changes before committing."));
     }
     return resolve(msg("Commit is currently unavailable."));
   }
 
   if (item.id === "push") {
     if (!hasBranch) {
-      return resolve(msg("Detached HEAD: checkout a branch before pushing."));
+      return jj
+        ? resolve(msg("No bookmark here: create one before pushing."))
+        : resolve(msg("Detached HEAD: checkout a branch before pushing."));
     }
     if (hasChanges) {
-      return resolve(msg("Commit or stash local changes before pushing."));
+      return jj
+        ? resolve(msg("Commit local changes before pushing."))
+        : resolve(msg("Commit or stash local changes before pushing."));
     }
     if (isBehind) {
-      return resolve(msg("Branch is behind upstream. Pull/rebase before pushing."));
+      return jj
+        ? resolve(msg("Bookmark is behind upstream. Pull/rebase before pushing."))
+        : resolve(msg("Branch is behind upstream. Pull/rebase before pushing."));
     }
     if (!gitStatus.hasUpstream && !hasOriginRemote) {
       return resolve(msg('Add an "origin" remote before pushing.'));
     }
     if (!isAhead) {
-      return resolve(msg("No local commits to push."));
+      return jj
+        ? resolve(msg("No local changes to push."))
+        : resolve(msg("No local commits to push."));
     }
     return resolve(msg("Push is currently unavailable."));
   }
@@ -359,6 +405,27 @@ export function getGitActionDisabledReason(
     return resolve(
       msg("View {shortLabel} is currently unavailable.", { shortLabel: terminology.shortLabel }),
     );
+  }
+  if (jj) {
+    const changeRequest = terminology.shortLabelWithArticle;
+    if (!hasBranch) {
+      return resolve(
+        msg("No bookmark here: create one before creating {changeRequest}.", { changeRequest }),
+      );
+    }
+    if (hasChanges) return resolve(msg("Commit local changes before pushing."));
+    if (gitStatus.hasUpstream || hasOriginRemote) {
+      if ((gitStatus.aheadOfDefaultCount ?? gitStatus.aheadCount) <= 0) {
+        return resolve(msg("No local changes to include in {changeRequest}.", { changeRequest }));
+      }
+      if (isBehind) {
+        return resolve(
+          msg("Bookmark is behind upstream. Pull/rebase before creating {changeRequest}.", {
+            changeRequest,
+          }),
+        );
+      }
+    }
   }
   if (!hasBranch) {
     return resolve(
@@ -432,11 +499,62 @@ export function resolveDefaultBranchActionDialogCopy(
     branchName: string;
     includesCommit: boolean;
     terminology: ChangeRequestTerminology;
+    vcsTerminology?: VcsTerminology;
   },
   resolve: MFunctionType = mFallback,
 ): DefaultBranchActionDialogCopy {
   const branchLabel = input.branchName;
   const { shortLabel, shortLabelWithArticle } = input.terminology;
+
+  if (input.vcsTerminology?.kind === "jj") {
+    const values = { branch: branchLabel, changeRequest: shortLabelWithArticle };
+    if (input.action === "push" || input.action === "commit_push") {
+      return input.includesCommit
+        ? {
+            title: resolve(msg("Commit & push to default bookmark?")),
+            description: resolve(
+              msg(
+                'This action will commit and push changes on "{branch}". You can continue on this bookmark or create a feature bookmark and run the same action there.',
+                { branch: branchLabel },
+              ),
+            ),
+            continueLabel: resolve(msg("Commit & push to {branch}", { branch: branchLabel })),
+          }
+        : {
+            title: resolve(msg("Push to default bookmark?")),
+            description: resolve(
+              msg(
+                'This action will push local changes on "{branch}". You can continue on this bookmark or create a feature bookmark and run the same action there.',
+                { branch: branchLabel },
+              ),
+            ),
+            continueLabel: resolve(msg("Push to {branch}", { branch: branchLabel })),
+          };
+    }
+    return input.includesCommit
+      ? {
+          title: resolve(
+            msg("Commit, push & create {shortLabel} from default bookmark?", { shortLabel }),
+          ),
+          description: resolve(
+            msg(
+              'This action will commit, push, and create {changeRequest} on "{branch}". You can continue on this bookmark or create a feature bookmark and run the same action there.',
+              values,
+            ),
+          ),
+          continueLabel: resolve(msg("Commit, push & create {shortLabel}", { shortLabel })),
+        }
+      : {
+          title: resolve(msg("Push & create {shortLabel} from default bookmark?", { shortLabel })),
+          description: resolve(
+            msg(
+              'This action will push local changes and create {changeRequest} on "{branch}". You can continue on this bookmark or create a feature bookmark and run the same action there.',
+              values,
+            ),
+          ),
+          continueLabel: resolve(msg("Push & create {shortLabel}", { shortLabel })),
+        };
+  }
 
   if (input.action === "push" || input.action === "commit_push") {
     if (input.includesCommit) {
