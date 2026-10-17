@@ -1153,17 +1153,52 @@ export const make = Effect.gen(function* () {
   });
 
   /** Maps each directory to the project it counts toward: a linked worktree counts toward its main checkout. */
+  const secondaryJjWorkspaceMainRoot = Effect.fn(
+    "AgentSessionScanner.secondaryJjWorkspaceMainRoot",
+  )(function* (directory: string) {
+    const realPath = yield* fileSystem
+      .realPath(directory)
+      .pipe(Effect.orElseSucceed(() => directory));
+    const handle = yield* vcsRegistry
+      .detect({ cwd: realPath, jjOnly: true })
+      .pipe(Effect.orElseSucceed(() => null));
+    if (handle?.kind !== "jj") return null;
+    const jjPaths = yield* resolveJjRepoPaths(fileSystem, path, handle.repository.rootPath).pipe(
+      Effect.orElseSucceed(() => null),
+    );
+    return jjPaths !== null && jjPaths.workspaceRoot !== jjPaths.mainWorkspaceRoot
+      ? jjPaths.mainWorkspaceRoot
+      : null;
+  });
+
   const resolveDirectoryProjects = Effect.fn("AgentSessionScanner.resolveDirectoryProjects")(
-    function* (resolvedDirectories: ReadonlyArray<string>) {
+    function* (
+      resolvedDirectories: ReadonlyArray<string>,
+      importedRoots?: ReadonlyMap<string, unknown>,
+    ) {
       // Stat every directory first so one batch reads all git identities.
       const directories = new Map<string, Option.Option<FileSystem.File.Info>>();
+      // A secondary jj workspace reads its identity from the main workspace, and is a project of
+      // its own only once one was imported at its root.
+      const identityDirectories = new Map<string, string>();
       for (const resolved of resolvedDirectories) {
         if (directories.has(resolved)) continue;
-        directories.set(resolved, yield* projectDirectoryStats(resolved));
+        const stats = yield* projectDirectoryStats(resolved);
+        const mainWorkspaceRoot = Option.isSome(stats)
+          ? yield* secondaryJjWorkspaceMainRoot(resolved)
+          : null;
+        if (mainWorkspaceRoot !== null) {
+          if (!importedRoots?.has(yield* directoryIdentity(resolved))) {
+            directories.set(resolved, Option.none());
+            continue;
+          }
+          identityDirectories.set(resolved, mainWorkspaceRoot);
+        }
+        directories.set(resolved, stats);
       }
       const directoryGitIdentities = yield* readGitIdentities(
         Array.from(directories).flatMap(([directory, stats]) =>
-          Option.isSome(stats) ? [directory] : [],
+          Option.isSome(stats) ? [identityDirectories.get(directory) ?? directory] : [],
         ),
       );
       const projects = new Map<
@@ -1176,7 +1211,9 @@ export const make = Effect.gen(function* () {
         } | null
       >();
       for (const [resolved, stats] of directories) {
-        const gitIdentity = directoryGitIdentities.get(resolved);
+        const gitIdentity = directoryGitIdentities.get(
+          identityDirectories.get(resolved) ?? resolved,
+        );
         if (Option.isNone(stats) || gitIdentity === undefined) {
           projects.set(resolved, null);
         } else if (gitIdentity._tag === "Worktree") {
@@ -1972,6 +2009,21 @@ export const make = Effect.gen(function* () {
     const { candidates: raw, truncated } = cachedCandidates;
     if (truncated) scanMultiplier = Math.min(scanMultiplier * 2, 16);
 
+    // Resolve persisted roots too. A project and a transcript can name
+    // different symlinks to the same directory.
+    const importedProjects = yield* projectStore
+      .listShells()
+      .pipe(
+        Effect.mapError(
+          (cause) => new AgentSessionScanError({ operation: "read-projects", cause }),
+        ),
+      );
+    const importedProjectsByRoot = new Map<string, (typeof importedProjects)[number]>();
+    for (const project of importedProjects) {
+      const projectRoot = path.resolve(expandHomePath(project.workspaceRoot, homeDir));
+      importedProjectsByRoot.set(normalizeProjectPathForComparison(projectRoot), project);
+      importedProjectsByRoot.set(yield* directoryIdentity(projectRoot), project);
+    }
     const merged = new Map<
       string,
       {
@@ -1987,6 +2039,7 @@ export const make = Effect.gen(function* () {
         const expanded = expandHomePath(candidate.cwd.trim(), homeDir);
         return path.isAbsolute(expanded) ? [path.resolve(expanded)] : [];
       }),
+      importedProjectsByRoot,
     );
 
     for (const candidate of raw) {
@@ -2014,21 +2067,6 @@ export const make = Effect.gen(function* () {
         existing.lastActiveAtMs === null || candidate.lastActiveAtMs === null
           ? (existing.lastActiveAtMs ?? candidate.lastActiveAtMs)
           : Math.max(existing.lastActiveAtMs, candidate.lastActiveAtMs);
-    }
-
-    // Resolve persisted roots too; transcripts may use different symlinks to the same directory.
-    const importedProjects = yield* projectStore
-      .listShells()
-      .pipe(
-        Effect.mapError(
-          (cause) => new AgentSessionScanError({ operation: "read-projects", cause }),
-        ),
-      );
-    const importedProjectsByRoot = new Map<string, (typeof importedProjects)[number]>();
-    for (const project of importedProjects) {
-      const projectRoot = path.resolve(expandHomePath(project.workspaceRoot, homeDir));
-      importedProjectsByRoot.set(normalizeProjectPathForComparison(projectRoot), project);
-      importedProjectsByRoot.set(yield* directoryIdentity(projectRoot), project);
     }
 
     const candidates: Array<AgentSessionProjectCandidate> = [];

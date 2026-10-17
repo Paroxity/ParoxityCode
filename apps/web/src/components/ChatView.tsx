@@ -3251,6 +3251,17 @@ export default function ChatView(props: ChatViewProps) {
     localServerError === null;
   const trayStatusItems = useChatBannerLane({
     environmentId,
+    vcsFallbackNotice: activeProject
+      ? {
+          environmentId,
+          repository: activeProject.workspaceRoot,
+          notice:
+            gitStatusQuery.data?.vcs?.kind === "git"
+              ? (gitStatusQuery.data.vcs.notice ?? null)
+              : null,
+          reason: vcsUnsupportedReason,
+        }
+      : null,
     vcsUnsupportedReason,
     activeProviderStatus,
     selectedModel: composerSelectedModelSelection?.model ?? activeThread?.modelSelection.model,
