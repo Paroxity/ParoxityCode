@@ -7,6 +7,7 @@ import type {
   UsageLimitSourceSnapshots,
 } from "@t3tools/contracts";
 import { useMessages } from "gt-react";
+import { TriangleAlertIcon } from "lucide-react";
 import { type Dispatch, type SetStateAction, useState } from "react";
 import { getDefaultServerModel } from "../../providerModels";
 import {
@@ -26,6 +27,8 @@ import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 /** Provider, run-error, and limit notices share the composer's tray status line. */
 export function useChatBannerLane(input: {
   readonly environmentId: EnvironmentId;
+  /** The server's reason this checkout's VCS cannot be used, shown as is. */
+  readonly vcsUnsupportedReason?: string | null;
   readonly activeProviderStatus: ServerProvider | null;
   readonly selectedModel: string | undefined;
   readonly providerStatuses: ReadonlyArray<ServerProvider>;
@@ -88,6 +91,15 @@ export function useChatBannerLane(input: {
       ? resolveLowLimitSwitchTarget(activeProviderStatus, providerStatuses)
       : null;
   const items: ComposerBannerStackItem[] = [];
+  if (input.vcsUnsupportedReason) {
+    items.push({
+      id: "vcs-unsupported",
+      variant: "warning",
+      group: "environment",
+      icon: <TriangleAlertIcon />,
+      title: input.vcsUnsupportedReason,
+    });
+  }
   const providerItem = providerStatusBannerItem({
     environmentId,
     status: providerStatus,

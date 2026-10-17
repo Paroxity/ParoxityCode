@@ -7,6 +7,7 @@ import {
   type ProjectScriptIcon,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
+import { GIT_VCS_TERMINOLOGY, JJ_VCS_TERMINOLOGY } from "@t3tools/shared/vcs";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -214,6 +215,7 @@ export function editorRequestForScript(
 export function ProjectScriptEditorDialog({
   environmentId,
   editScope = AuthOrchestrationOperateScope,
+  workspaceNoun = GIT_VCS_TERMINOLOGY.workspaceNoun,
   request,
   scripts,
   onSubmit,
@@ -222,6 +224,7 @@ export function ProjectScriptEditorDialog({
 }: {
   environmentId: EnvironmentId;
   editScope?: typeof AuthOrchestrationOperateScope | typeof AuthSettingsWriteScope;
+  workspaceNoun?: string;
   request: ProjectScriptEditorRequest | null;
   scripts: ReadonlyArray<ProjectScript>;
   onSubmit: (
@@ -274,6 +277,7 @@ export function ProjectScriptEditorDialog({
               key={shown.key}
               environmentId={environmentId}
               editScope={editScope}
+              workspaceNoun={workspaceNoun}
               request={shown.request}
               scripts={scripts}
               validationError={validationError}
@@ -332,6 +336,7 @@ export function ProjectScriptEditorDialog({
 function ProjectScriptEditorForm({
   environmentId,
   editScope,
+  workspaceNoun,
   request,
   scripts,
   validationError,
@@ -342,6 +347,7 @@ function ProjectScriptEditorForm({
 }: {
   environmentId: EnvironmentId;
   editScope: typeof AuthOrchestrationOperateScope | typeof AuthSettingsWriteScope;
+  workspaceNoun: string;
   request: ProjectScriptEditorRequest;
   scripts: ReadonlyArray<ProjectScript>;
   validationError: string | null;
@@ -355,6 +361,8 @@ function ProjectScriptEditorForm({
 }) {
   const gt = useGT();
   const m = useMessages();
+  // Callers pass an English noun; translated copy needs a whole sentence per VCS.
+  const jjWording = workspaceNoun === JJ_VCS_TERMINOLOGY.workspaceNoun;
   const canEditActions = useEnvironmentScope(environmentId, editScope);
   const canWriteSettings = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const formId = React.useId();
@@ -604,7 +612,11 @@ function ProjectScriptEditorForm({
                   checked={runOnWorktreeCreate}
                   onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
                 />
-                <T>Run automatically on worktree creation</T>
+                {jjWording ? (
+                  <T>Run automatically on workspace creation</T>
+                ) : (
+                  <T>Run automatically on worktree creation</T>
+                )}
               </label>
               <label
                 className={`flex items-center gap-2.5 text-body text-foreground ${
@@ -635,7 +647,11 @@ function ProjectScriptEditorForm({
                   checked={runOnSettle}
                   onCheckedChange={(checked) => setRunOnSettle(Boolean(checked))}
                 />
-                <T>Run in the thread's worktree when the thread settles</T>
+                {jjWording ? (
+                  <T>Run in the thread's workspace when the thread settles</T>
+                ) : (
+                  <T>Run in the thread's worktree when the thread settles</T>
+                )}
               </label>
               <label className="flex items-center gap-2.5 text-body text-foreground">
                 <Checkbox

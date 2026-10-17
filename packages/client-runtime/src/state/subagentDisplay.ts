@@ -7,6 +7,7 @@ import type {
 } from "@t3tools/contracts";
 import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/model";
 import { fileBasename } from "@t3tools/shared/path";
+import { GIT_VCS_TERMINOLOGY, type VcsTerminology } from "@t3tools/shared/vcs";
 import { resolveModelShortName } from "../providerClients.ts";
 import { isTerminalSubagentStatus } from "./subagentRuntime.ts";
 import { mFallback, msg } from "gt-i18n";
@@ -51,6 +52,7 @@ export function resolveSubagentMetadata(
     readonly model: string | null;
     readonly modelSelection?: Pick<ModelSelection, "model"> | undefined;
     readonly provider?: Pick<ServerProvider, "driver" | "models"> | null | undefined;
+    readonly terminology?: VcsTerminology | undefined;
     readonly parentThread?:
       | Pick<OrchestrationV2ThreadShell, "projectId" | "worktreePath">
       | null
@@ -91,12 +93,14 @@ export function resolveSubagentMetadata(
     : reportedLabel;
   const parentWorkspace = input.parentThread?.worktreePath ?? input.parentProject?.workspaceRoot;
   const childWorkspace = input.childThread?.worktreePath ?? input.childProject?.workspaceRoot;
+  const jj = (input.terminology ?? GIT_VCS_TERMINOLOGY).kind === "jj";
   const workspace = [
     ...(input.parentThread &&
     input.childProject &&
     input.childProject.id !== input.parentThread.projectId
       ? [
           {
+            kind: "project" as const,
             label: resolve(msg("Project", { $context: "field label" })),
             value: input.childProject.title,
           },
@@ -105,9 +109,12 @@ export function resolveSubagentMetadata(
     ...(parentWorkspace && childWorkspace && parentWorkspace !== childWorkspace
       ? [
           {
+            kind: input.childThread?.branch ? ("ref" as const) : ("workspace" as const),
             label: input.childThread?.branch
-              ? resolve(msg("Branch", { $context: "field label" }))
-              : input.childThread?.worktreePath
+              ? jj
+                ? resolve(msg("Bookmark", { $context: "field label" }))
+                : resolve(msg("Branch", { $context: "field label" }))
+              : input.childThread?.worktreePath && !jj
                 ? resolve(msg("Worktree", { $context: "field label" }))
                 : resolve(msg("Workspace", { $context: "field label" })),
             value: input.childThread?.branch ?? fileBasename(childWorkspace),

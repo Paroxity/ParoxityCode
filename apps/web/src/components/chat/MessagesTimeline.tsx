@@ -51,6 +51,7 @@ import { UserMessageRow } from "./TimelineUserMessageRow";
 import { useThreadFindPositionReader } from "./useThreadFindPositionReader";
 import { V2EventTimelineRow } from "./TimelineV2EventRow";
 import { TimelineMinimap } from "./TimelineMinimap";
+import { useVcsTerminology, VcsTerminologyContext } from "~/state/vcs";
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
 import { MarkdownFindContext } from "./markdownFindContext";
 import { useRegisterChatCanvasTimeline } from "./ChatCanvasContext";
@@ -481,6 +482,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const gt = useGT();
   const layoutPaneFocusedRef = useLayoutPaneFocusedRef();
   const pendingRequest = pendingRequestProp?.blocking === false ? null : pendingRequestProp;
+  const vcsTerminology = useVcsTerminology(
+    activeThreadEnvironmentId,
+    workspaceRoot ?? markdownCwd ?? null,
+  );
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   // Snapshot restore positions on identity changes; ongoing scroll writes must not move them.
   // Find open at the opening is part of the snapshot: opening find later
@@ -1321,6 +1326,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     markdownCwd,
     resolvedTheme,
     workspaceRoot,
+    vcsTerminology,
     skills,
     runs,
     activeThreadEnvironmentId,
@@ -1729,7 +1735,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   }
 
   return (
-    <>
+    <VcsTerminologyContext value={vcsTerminology}>
       {activityAnnouncer}
       {TimelineGapRecorder ? (
         <Suspense fallback={null}>
@@ -1820,7 +1826,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
           </TimelineRowActivityCtx>
         </TimelineWakeUpsRailInteractionCtx>
       </MarkdownFindContext>
-    </>
+    </VcsTerminologyContext>
   );
 });
 
@@ -2110,6 +2116,7 @@ function WorktreeSetupTimelineRow({
     <WorktreeSetupRows
       environmentId={ctx.activeThreadEnvironmentId}
       snapshot={row.snapshot}
+      terminology={ctx.vcsTerminology}
       onOpenTerminal={openTerminal && terminalId ? () => openTerminal(terminalId) : null}
     />
   );

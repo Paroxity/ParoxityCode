@@ -17,6 +17,7 @@ import type { EnvironmentPresentation } from "../../state/environments";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { resolveEnvModeLabel, WORKTREE_SUBMODULES_LABELS } from "../BranchToolbar.logic";
 import { runtimeModeConfig } from "../chat/runtimeModeConfig";
+import { GIT_VCS_TERMINOLOGY } from "@t3tools/shared/vcs";
 import { PULL_REQUEST_MERGE_METHOD_LABELS } from "../pullRequest/pullRequestDetail.logic";
 import { Badge } from "../ui/badge";
 import { Button, ContentButton, InlineButton } from "../ui/button";
@@ -81,7 +82,8 @@ function formatValue(
   }
   if (typeof value === "string") {
     if (key === "defaultThreadEnvMode" && (value === "local" || value === "worktree")) {
-      return resolveEnvModeLabel(value, resolve);
+      // The inheritance preview is VCS-agnostic: it has no project in hand.
+      return resolveEnvModeLabel(value, GIT_VCS_TERMINOLOGY, resolve);
     }
     if (key === "defaultRuntimeMode" && value in runtimeModeConfig) {
       return runtimeModeConfig[value as keyof typeof runtimeModeConfig].label;

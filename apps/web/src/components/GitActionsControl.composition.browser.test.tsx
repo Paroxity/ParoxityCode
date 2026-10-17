@@ -9,6 +9,7 @@ import { PublishRepositoryDialog } from "./PublishRepositoryDialog";
 const publish = vi.hoisted(() => ({ run: vi.fn() }));
 
 vi.mock("~/state/query", () => ({
+  useEnvironmentQuerySelector: () => undefined,
   useEnvironmentQuery: () => ({
     data: {
       versionControlSystems: [],
@@ -59,6 +60,8 @@ it("keeps composition Enter in the repository path from publishing", async () =>
       threadRef={null}
       gitCwd="/repo"
       offeredProviders={undefined}
+      vcsActionsSupported
+      unsupportedReason={null}
     />,
   );
   // The redesigned dialog asks for the owner and the name on one page.
