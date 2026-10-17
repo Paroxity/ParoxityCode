@@ -15,6 +15,7 @@ import {
   type Project,
   OrchestratorMcpTarget,
   type OrchestrationV2ThreadShell,
+  type Project as ProjectRecord,
   type ScheduledTask,
   type ScheduledTaskUpsertInput,
   ScheduledTaskId,
@@ -66,6 +67,7 @@ import {
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ServerConfig from "../config.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -86,6 +88,7 @@ const decodeTarget = Schema.decodeUnknownEffect(OrchestratorMcpTarget);
 
 const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+  Layer.provide(Layer.mock(GitWorkflowService.GitWorkflowService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
 );
 
@@ -2793,6 +2796,7 @@ describe("OrchestratorMcpService provider resolution", () => {
             resolveCommit: ({ cwd }) => Effect.fail(notARepository(cwd)),
           }),
         ),
+        Layer.provide(Layer.mock(GitWorkflowService.GitWorkflowService)({})),
         Layer.provide(dependencies),
       );
       yield* Effect.gen(function* () {
@@ -2893,6 +2897,12 @@ describe("OrchestratorMcpService provider resolution", () => {
             isNonGitProject: () => Effect.succeed(false),
           }),
           Layer.succeed(GitVcsDriver.GitVcsDriver, git),
+          Layer.mock(GitWorkflowService.GitWorkflowService)({
+            committedBase: (cwd) =>
+              git
+                .resolveCommit({ cwd, revision: "HEAD" })
+                .pipe(Effect.map((commit) => commit.commitSha)),
+          }),
         );
         yield* Effect.gen(function* () {
           const service = yield* OrchestratorMcpService.OrchestratorMcpService;
@@ -3365,6 +3375,7 @@ describe("OrchestratorMcpService provider resolution", () => {
                 input.runId === childRunId ? Deferred.succeed(prepared, undefined) : Effect.void,
             }),
           ),
+          Layer.provide(Layer.mock(GitWorkflowService.GitWorkflowService)({})),
           Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
         );
 
@@ -4167,6 +4178,7 @@ describe("OrchestratorMcpService provider resolution", () => {
     ) =>
       OrchestratorMcpService.layer.pipe(
         Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+        Layer.provide(Layer.mock(GitWorkflowService.GitWorkflowService)({})),
         Layer.provide(
           Layer.mock(GitVcsDriver.GitVcsDriver)({
             resolvePrimaryRemoteName: () => Effect.succeed("origin"),
@@ -4451,6 +4463,7 @@ describe("OrchestratorMcpService provider resolution", () => {
       OrchestratorMcpService.layer.pipe(
         Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
         Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)(git)),
+        Layer.provide(Layer.mock(GitWorkflowService.GitWorkflowService)({})),
         Layer.provide(
           Layer.mergeAll(
             NodeServices.layer,
@@ -5286,6 +5299,185 @@ describe("OrchestratorMcpService provider resolution", () => {
       }),
     );
   });
+  for (const vcs of ["git", "jj"] as const) {
+    it.effect.each([true, false])(
+      `checks project containment of the parent's ${vcs} checkout revision (contained: %s)`,
+      (containsBase) =>
+        Effect.gen(function* () {
+          let delegated = false;
+          const task = {
+            id: taskId,
+            threadId: parentThreadId,
+            runId: parentRunId,
+            parentNodeId,
+            origin: "app_owned",
+            createdBy: "agent",
+            driver: ProviderDriverKind.make("antigravity"),
+            providerInstanceId: antigravityInstanceId,
+            providerThreadId: null,
+            childThreadId,
+            nativeTaskRef: null,
+            prompt: "Summarize the diff.",
+            title: null,
+            model: "ant-model",
+            status: "running",
+            result: null,
+            startedAt: null,
+            completedAt: null,
+          };
+          const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+          const parentCwd = "/parent/secondary-workspace";
+          const resolvedCwds: string[] = [];
+          const containmentChecks: Array<{ readonly cwd: string; readonly refName: string }> = [];
+          const layerDependencies = Layer.mergeAll(
+            NodeServices.layer,
+            NodeCrypto.layer,
+            Layer.mock(ThreadManagementService.ThreadManagementService)({
+              hasReceipt: () => Effect.succeed(false),
+              assertProviderInstanceEnabled: () => Effect.void,
+              getThreadRecords: (threadId) =>
+                Effect.succeed(
+                  threadId === parentThreadId
+                    ? {
+                        ...parentProjection(delegated ? [task] : []),
+                        thread: {
+                          ...parentProjection([]).thread,
+                          worktreePath: parentCwd,
+                        },
+                      }
+                    : childProjection,
+                ),
+              dispatch: (command) =>
+                Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      delegated = true;
+                    }),
+                  ),
+                  Effect.as({
+                    sequence: 1,
+                    storedEvents: [
+                      {
+                        sequence: 1,
+                        commandId: null,
+                        event: { type: "subagent.updated", payload: task },
+                      },
+                    ],
+                  } as never),
+                ),
+            }),
+            Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+              isNonGitProject: () => Effect.succeed(false),
+            }),
+            Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+            // The parent's branch is not in the project, so the child starts from the commit.
+            Layer.mock(GitVcsDriver.GitVcsDriver)({
+              resolveCommit: ({ cwd, revision }) =>
+                Effect.fail(
+                  new GitCommandError({
+                    operation: "GitVcsDriver.resolveCommit",
+                    command: `git rev-parse --verify ${revision}`,
+                    cwd,
+                    detail: "unknown revision",
+                  }),
+                ),
+            }),
+            Layer.mock(GitWorkflowService.GitWorkflowService)({
+              committedBase: (cwd) => {
+                assert.equal(cwd, parentCwd);
+                resolvedCwds.push(cwd);
+                return Effect.succeed(vcs === "jj" ? "jj-current-commit" : "git-head-commit");
+              },
+              hasCommit: (input) => {
+                containmentChecks.push(input);
+                return Effect.succeed(containsBase);
+              },
+            }),
+            ServerSettings.layerTest(),
+            Layer.mock(ProviderRegistry.ProviderRegistry)({
+              getProviders: Effect.succeed([
+                providerSnapshot({
+                  instanceId: codexInstanceId,
+                  driver: ProviderDriverKind.make("codex"),
+                  model: "gpt-5.4",
+                }),
+                providerSnapshot({
+                  instanceId: antigravityInstanceId,
+                  driver: ProviderDriverKind.make("antigravity"),
+                  model: "ant-model",
+                }),
+              ]),
+            }),
+            adapterRegistryLayer([codexInstanceId, antigravityInstanceId]),
+            Layer.mock(ProjectService.ProjectService)({
+              getById: () =>
+                Effect.succeedSome({
+                  id: projectId,
+                  title: "Parent project",
+                  workspaceRoot: "/parent/main",
+                } as unknown as ProjectRecord),
+            }),
+            Layer.mock(SecretRequests.SecretRequests)({}),
+            Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+          );
+
+          yield* Effect.gen(function* () {
+            const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+            const delegation = service.delegateTask(scope, {
+              task: "Summarize the diff.",
+              target: { providerInstanceId: antigravityInstanceId, model: "ant-model" },
+              mode: "async",
+              isolation: "worktree",
+              clientRequestId: "delegate-antigravity-1",
+            });
+            if (!containsBase) {
+              const error = yield* delegation.pipe(Effect.flip);
+              assert.deepEqual(resolvedCwds, [parentCwd]);
+              assert.equal(error.code, "invalid_request");
+              assert.equal(
+                error.message,
+                `Isolation "worktree" creates the child checkout in project "Parent project" (/parent/main), which does not contain the parent checkout's commit. Use isolation "shared" to work in the parent's checkout.`,
+              );
+              assert.deepEqual(yield* Ref.get(dispatched), []);
+              assert.deepEqual(containmentChecks, [
+                {
+                  cwd: "/parent/main",
+                  refName: vcs === "jj" ? "jj-current-commit" : "git-head-commit",
+                },
+              ]);
+              return;
+            }
+            const result = yield* delegation;
+            assert.deepEqual(containmentChecks, [
+              {
+                cwd: "/parent/main",
+                refName: vcs === "jj" ? "jj-current-commit" : "git-head-commit",
+              },
+            ]);
+            assert.equal(result.status, "running");
+            assert.equal(result.providerInstanceId, antigravityInstanceId);
+            const commands = yield* Ref.get(dispatched);
+            assert.equal(commands.length, 1);
+            const request = commands[0] as {
+              type: string;
+              modelSelection: { instanceId: string; model: string };
+              workspaceStrategy: unknown;
+            };
+            assert.equal(request.type, "delegated_task.request");
+            assert.equal(request.modelSelection.instanceId, antigravityInstanceId);
+            assert.equal(request.modelSelection.model, "ant-model");
+            assert.deepEqual(request.workspaceStrategy, {
+              type: "worktree",
+              baseRef: vcs === "jj" ? "jj-current-commit" : "git-head-commit",
+              startFromOrigin: false,
+            });
+            assert.deepEqual(resolvedCwds, [parentCwd]);
+          }).pipe(
+            Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(layerDependencies))),
+          );
+        }),
+    );
+  }
 });
 
 describe("OrchestratorMcpService thread lookup", () => {
