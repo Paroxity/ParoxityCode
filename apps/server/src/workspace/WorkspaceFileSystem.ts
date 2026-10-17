@@ -23,6 +23,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Schema from "effect/Schema";
 
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
+import { isWithinRoot } from "./pathContainment.ts";
 import * as KnownWorkspaces from "./KnownWorkspaces.ts";
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
@@ -266,7 +267,7 @@ export const make = Effect.gen(function* () {
         : yield* toHostPath(requestedPath);
     if (
       isNetworkPath(hostPath) &&
-      !KnownWorkspaces.isWithinRoot(path, path.resolve(hostPath), path.resolve(input.cwd))
+      !isWithinRoot(path, path.resolve(hostPath), path.resolve(input.cwd))
     ) {
       return yield* new WorkspacePaths.WorkspacePathOutsideRootError({
         workspaceRoot: input.cwd,

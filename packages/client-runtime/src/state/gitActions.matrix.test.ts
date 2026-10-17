@@ -38,8 +38,16 @@ const cases: Case[] = [
     mobile: [["push", "pr"], "create_pr"],
   },
   {
-    name: "detached Git HEAD",
-    status: { ...clean, refName: null },
+    name: "fallback detached Git HEAD",
+    status: {
+      ...clean,
+      refName: null,
+      vcs: {
+        kind: "git",
+        notice:
+          "Jujutsu was not found on the server’s PATH. Using Git for this colocated repository. Git HEAD may be detached: commits won't be on a branch; push needs a branch.",
+      },
+    },
     mobile: [[], "show_hint"],
   },
   {
@@ -107,6 +115,25 @@ describe("named mobile action policies", () => {
     expect(menu.filter((item) => !item.disabled).map((item) => item.id)).toEqual(mobile[0]);
     const quick = resolveQuickAction(status, busy, false, remote);
     expect(quick.action ?? quick.kind).toBe(mobile[1]);
+    if (status.refName === null && status.vcs?.kind === "git") {
+      expect(quick).toMatchObject({
+        disabled: true,
+        hint: "Create and checkout a branch before pushing or opening a PR.",
+      });
+      for (const id of ["push", "pr"] as const) {
+        const item = menu.find((item) => item.id === id)!;
+        expect(
+          getGitActionDisabledReason({
+            item,
+            gitStatus: status,
+            isBusy: busy,
+            hasOriginRemote: remote,
+          }),
+        ).toBe(
+          `Detached HEAD: checkout a branch before ${id === "push" ? "pushing" : "creating a PR"}.`,
+        );
+      }
+    }
     if (status.vcs?.kind === "jj" && status.hasWorkingTreeChanges) {
       for (const id of ["push", "pr"] as const) {
         const item = menu.find((item) => item.id === id)!;
