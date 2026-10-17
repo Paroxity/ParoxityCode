@@ -49,6 +49,9 @@ export class CheckpointStore extends Context.Service<
   {
     readonly isGitRepository: (cwd: string) => Effect.Effect<boolean, CheckpointStoreError>;
 
+    /** True when the workspace's VCS (jj when colocated, else Git) can hold checkpoints. */
+    readonly supportsCheckpoints: (cwd: string) => Effect.Effect<boolean, CheckpointStoreError>;
+
     readonly captureCheckpoint: (
       input: CaptureCheckpointInput,
     ) => Effect.Effect<void, CheckpointStoreError>;
@@ -96,6 +99,16 @@ export const make = Effect.gen(function* () {
     return (yield* git.detectRepository(cwd)) !== null;
   });
 
+  const supportsCheckpoints: CheckpointStore["Service"]["supportsCheckpoints"] = Effect.fn(
+    "CheckpointStore.supportsCheckpoints",
+  )(function* (cwd: string) {
+    const jj = yield* vcsRegistry.detect({ cwd, jjOnly: true });
+    if (jj?.kind !== "jj") return yield* isGitRepository(cwd);
+    if (!jj.driver.checkpoints) return false;
+    const usable = jj.driver.checkpointsUsable;
+    return usable ? yield* usable(cwd) : true;
+  });
+
   const captureCheckpoint: CheckpointStore["Service"]["captureCheckpoint"] = Effect.fn(
     "captureCheckpoint",
   )(function* (input) {
@@ -140,6 +153,7 @@ export const make = Effect.gen(function* () {
 
   return CheckpointStore.of({
     isGitRepository,
+    supportsCheckpoints,
     captureCheckpoint,
     hasCheckpointRef,
     restoreCheckpoint,
