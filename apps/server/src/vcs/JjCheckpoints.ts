@@ -20,6 +20,7 @@ export interface JjCheckpointDeps {
   readonly process: VcsProcess.VcsProcess["Service"];
   /** Fails unless jj can operate here; yields the colocated git store. */
   readonly ensureGitDir: (operation: string, cwd: string) => Effect.Effect<string, VcsError>;
+  readonly workspaceRoot: (cwd: string) => Effect.Effect<string, VcsError>;
   readonly currentChange: (cwd: string) => Effect.Effect<JjChange, VcsError>;
 }
 
@@ -57,8 +58,9 @@ export const makeJjCheckpointOps = (deps: JjCheckpointDeps): VcsDriver.VcsCheckp
       }),
     );
 
+  // Scoped to the project directory, as Git's `restore -- .` is.
   const restoreFrom = (operation: string, cwd: string, commitId: string) =>
-    jjCommand(deps.process, operation, cwd, ["restore", "--from", commitId], {
+    jjCommand(deps.process, operation, cwd, ["restore", "--from", commitId, 'cwd:"."'], {
       allowNonZeroExit: true,
     });
 
@@ -244,10 +246,12 @@ export const makeJjCheckpointOps = (deps: JjCheckpointDeps): VcsDriver.VcsCheckp
         });
       }
 
+      // The work tree makes `.` the project directory, matching restore's scope.
+      const workTree = yield* deps.workspaceRoot(input.cwd);
       const result = yield* colocatedGitCommand(
         deps.process,
         operation,
-        { gitDir, cwd: input.cwd },
+        { gitDir, workTree, cwd: input.cwd },
         [
           "diff",
           ...(input.format === "numstat" ? ["--numstat", "-z"] : ["--patch"]),
