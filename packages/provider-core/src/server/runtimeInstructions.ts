@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off -- A few synchronous stats while building turn text; adapters build it outside any FileSystem service.
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+
 import type { AgentFeedbackMode } from "@t3tools/contracts";
 
 import type { ProviderAdapterV2RuntimePolicy } from "./ProviderAdapter.ts";
@@ -15,6 +19,62 @@ Link each PR you create, take over, or push to: link_pull_request, or link_pull_
 If available, call link_issue for each issue you take on or file, even via CLI; skip issues you only read.
 </pull_request_linking>`;
 
+const JJ_INSTRUCTIONS = `<version_control>
+This is a colocated Jujutsu (jj) repository, despite the .git directory. Use jj, not git, for anything that writes: commit, describe, new, bookmarks, push, and restoring files. git restore, git clean, git commit and git checkout bypass jj's working copy. Read with jj too: git's HEAD is not the working-copy change @, so use jj status, jj diff and jj log.
+</version_control>`;
+
+/**
+ * Mirrors the server's jj detection (apps/server/src/vcs/JjRepo.ts): the nearest `.jj` or `.git`
+ * above cwd wins, and the nearest `.t3code/vcs.json` Git pin opts out. jj availability is not checked.
+ */
+function isJjWorkspace(cwd: string | null | undefined): boolean {
+  if (!cwd) return false;
+  let current: string;
+  try {
+    current = NodeFS.realpathSync(cwd);
+  } catch {
+    return false;
+  }
+  let marker: "jj" | "git" | null = null;
+  let pinned: string | null = null;
+  for (;;) {
+    pinned ??= readVcsPin(current);
+    if (marker === null) {
+      if (isDirectory(NodePath.join(current, ".jj"))) marker = "jj";
+      else if (NodeFS.existsSync(NodePath.join(current, ".git"))) marker = "git";
+    }
+    if (marker !== null && pinned !== null) break;
+    const parent = NodePath.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return marker === "jj" && pinned !== "git";
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return NodeFS.statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** The nearest pin file decides even when it says "auto"; unreadable files count as auto. */
+function readVcsPin(dir: string): string | null {
+  const file = NodePath.join(dir, ".t3code", "vcs.json");
+  if (!NodeFS.existsSync(file)) return null;
+  try {
+    const config = JSON.parse(NodeFS.readFileSync(file, "utf8")) as {
+      vcs?: { kind?: unknown };
+      vcsKind?: unknown;
+    };
+    const kind = config.vcs?.kind ?? config.vcsKind;
+    return typeof kind === "string" ? kind : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
 /** Omit model and effort when the harness manages them dynamically. */
 export function buildRuntimeInstructions(runtime: {
   readonly harness: string;
@@ -26,6 +86,8 @@ export function buildRuntimeInstructions(runtime: {
   readonly pullRequestLinking?: boolean;
   /** Adds the folder list of a multi-folder thread. */
   readonly runtimePolicy?: Pick<ProviderAdapterV2RuntimePolicy, "cwd" | "workspace"> | undefined;
+  /** The agent's working directory when no runtime policy names it; a jj workspace adds jj guidance. */
+  readonly cwd?: string | null | undefined;
 }): string {
   const harness = toSingleLine(runtime.harness);
   const model = toSingleLine(runtime.model ?? "");
@@ -44,7 +106,8 @@ export function buildRuntimeInstructions(runtime: {
     runtime.pullRequestLinking === false
       ? runtimeInfo
       : `${runtimeInfo}\n\n${PULL_REQUEST_LINKING_INSTRUCTIONS}`;
-  return [linked + feedback, ...(workspace === "" ? [] : [workspace])].join("\n\n");
+  const jj = isJjWorkspace(runtime.cwd ?? runtime.runtimePolicy?.cwd) ? JJ_INSTRUCTIONS : "";
+  return [linked + feedback, ...[workspace, jj].filter((part) => part !== "")].join("\n\n");
 }
 
 function toSingleLine(value: string): string {
