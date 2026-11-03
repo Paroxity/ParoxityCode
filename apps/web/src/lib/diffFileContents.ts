@@ -9,6 +9,7 @@ import type {
   PullRequestDiffFileContentsInput,
   PullRequestDiffFileContentsResult,
   PullRequestRef,
+  PullRequestRoundSelection,
   ReviewDiffFileContentsInput,
   ReviewDiffFileContentsResult,
   ReviewDiffPreviewSourceKind,
@@ -30,6 +31,7 @@ interface PullRequestDiffFileContentsSource {
   readonly environmentId: EnvironmentId;
   readonly reference: PullRequestRef;
   readonly commit: string | null;
+  readonly round?: PullRequestRoundSelection | null;
   readonly cacheKey: string;
 }
 
@@ -178,6 +180,7 @@ export function createPullRequestDiffFileContentsLoader<E>(
       input: {
         ...source.reference,
         ...(source.commit === null ? {} : { commit: source.commit }),
+        ...(source.round ? { round: source.round } : {}),
         changeType,
         oldPath,
         newPath,

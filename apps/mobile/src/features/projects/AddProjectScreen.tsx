@@ -91,7 +91,10 @@ import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
 import { ErrorBanner } from "../../components/ui/ErrorBanner";
 import { SourceControlIcon } from "./SourceControlIcon";
-import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import {
+  newRepositoryVisibility,
+  sourceControlClients,
+} from "@t3tools/client-runtime/source-control-clients";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { uuidv4 } from "../../lib/uuid";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -1307,7 +1310,7 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
           cwd: workspaceRoot,
           provider: publishTarget.definition.kind,
           repository: getNewProjectRepository(publishTarget, workspaceRoot),
-          visibility: "private",
+          visibility: newRepositoryVisibility(publishTarget.definition),
         },
       }).then((publishResult) => {
         if (AsyncResult.isFailure(publishResult)) {
@@ -1393,9 +1396,15 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
           {publishTarget !== null ? (
             <ListSection>
               <ListRow
-                title={gt("Create private repository on {provider}", {
-                  provider: publishTarget.definition.label,
-                })}
+                title={
+                  newRepositoryVisibility(publishTarget.definition) === "public"
+                    ? gt("Create public repository on {provider}", {
+                        provider: publishTarget.definition.label,
+                      })
+                    : gt("Create private repository on {provider}", {
+                        provider: publishTarget.definition.label,
+                      })
+                }
                 subtitle={
                   trimmedName.length > 0 && pathPreview !== null
                     ? getNewProjectRepository(publishTarget, pathPreview)
@@ -1411,9 +1420,15 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
                 isFirst
                 right={
                   <ThemedSwitch
-                    accessibilityLabel={gt("Create private repository on {provider}", {
-                      provider: publishTarget.definition.label,
-                    })}
+                    accessibilityLabel={
+                      newRepositoryVisibility(publishTarget.definition) === "public"
+                        ? gt("Create public repository on {provider}", {
+                            provider: publishTarget.definition.label,
+                          })
+                        : gt("Create private repository on {provider}", {
+                            provider: publishTarget.definition.label,
+                          })
+                    }
                     value={publishes}
                     onValueChange={setPublishes}
                   />

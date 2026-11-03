@@ -22,6 +22,7 @@ import {
   useSharedPullRequestSummary,
 } from "~/state/pullRequests";
 import {
+  pullRequestActivityView,
   readPullRequestDetailSnapshot,
   resolveDisplayedPullRequestDetail,
   samePullRequestReadExceptStamps,
@@ -199,28 +200,7 @@ export function usePullRequestDetail(
                 updateMethods: [],
                 labels: false,
               },
-          author: activity?.author ?? coreDetail.author,
-          reviewers: activity?.reviewers ?? coreDetail.reviewers,
-          comments: activity?.comments ?? [],
-          commentCount: Math.max(
-            activity?.commentCount ?? 0,
-            new Set([
-              ...(activity?.comments.map((comment) => comment.id) ?? []),
-              ...(activity?.reviewThreads.flatMap((thread) =>
-                thread.comments.map((comment) => comment.id),
-              ) ?? []),
-            ]).size,
-          ),
-          commentsTruncated: activity?.commentsTruncated ?? false,
-          reviewThreads: activity?.reviewThreads ?? [],
-          ...(activity?.reviewThreadsTruncated === undefined
-            ? {}
-            : { reviewThreadsTruncated: activity.reviewThreadsTruncated }),
-          ...(activity?.overviewThreads === undefined
-            ? {}
-            : { overviewThreads: activity.overviewThreads }),
-          commits: activity?.commits ?? [],
-          reactions: activity?.reactions ?? [],
+          ...pullRequestActivityView(coreDetail, activity),
         };
   // Keep the shown detail through refreshes that only restamp it, so the panel's tree can skip
   // re-rendering. Code that orders local edits against observations reads `observedAt` instead.

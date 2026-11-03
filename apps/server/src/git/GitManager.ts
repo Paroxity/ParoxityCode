@@ -91,6 +91,7 @@ import {
   resolvePullRequestWorktreeLocalBranchName,
   resolveTextGenerationSettings,
   runChangeRequestStep,
+  followPushedBranch,
   summarizeGitActionResult,
   toPullRequestInfo,
   toResolvedPullRequest,
@@ -477,10 +478,22 @@ export const make = Effect.gen(function* () {
     branch: string | null,
   ) {
     const result = yield* gitCore.pushCurrentBranch(cwd, branch);
-    if (result.status === "pushed" && result.branch) {
-      yield* shareBranchBase(cwd, result.branch);
-    }
-    return result;
+    if (result.status !== "pushed" || !result.branch) return { result, note: null };
+    const pushed = result.branch;
+    yield* shareBranchBase(cwd, pushed);
+    const note = yield* followPushedBranch({
+      provider: yield* sourceControlProvider(cwd).pipe(Effect.orElseSucceed(() => null)),
+      cwd,
+      branch: pushed,
+      headSha: gitCore
+        .execute({
+          operation: "GitManager.pushCurrentBranch.head",
+          cwd,
+          args: ["rev-parse", "--verify", `refs/heads/${pushed}^{commit}`],
+        })
+        .pipe(Effect.map((head) => head.stdout.trim())),
+    });
+    return { result, note };
   });
   /**
    * Before a push's first side effect: a caller that needs approval learns which hooks to ask
@@ -1683,9 +1696,10 @@ export const make = Effect.gen(function* () {
   const buildCompletionToast = Effect.fn("buildCompletionToast")(function* (
     cwd: string,
     result: Pick<GitRunStackedActionResult, "action" | "branch" | "commit" | "push" | "pr">,
+    pushNote: string | null,
   ) {
     const terms = yield* changeRequestTermsFor(cwd);
-    const summary = summarizeGitActionResult(result, terms);
+    const summary = summarizeGitActionResult(result, terms, pushNote);
     let latestOpenPr: PullRequestInfo | null = null;
     let currentBranchIsDefault = false;
     let finalBranchContext: {
@@ -2147,6 +2161,7 @@ export const make = Effect.gen(function* () {
     }
     const push = needsPush
       ? yield* pushCurrentBranch(input.cwd, status.branch).pipe(
+          Effect.map(({ result }) => result),
           Effect.mapError(
             (cause) =>
               pushHooksUnapproved(status.branch ?? "HEAD", cause) ??
@@ -2603,7 +2618,7 @@ export const make = Effect.gen(function* () {
       mergedAt: latest.mergedAt ?? null,
       headSha: latest.headSha ?? null,
       // Hosting CLIs may target upstream; the PR URL identifies its actual repository.
-      repositoryKey: pullRequestRepositoryKey(latest.url),
+      repositoryKey: latest.repositoryKey ?? pullRequestRepositoryKey(latest.url),
     };
   }, withBranchPullRequestGitReads);
 
@@ -3308,7 +3323,7 @@ export const make = Effect.gen(function* () {
             )
           : { status: "skipped_not_requested" as const };
 
-        const push = wantsPush
+        const pushed = wantsPush
           ? yield* progress
               .emit({
                 kind: "phase_started",
@@ -3319,7 +3334,8 @@ export const make = Effect.gen(function* () {
                 Effect.tap(() => Ref.set(currentPhase, Option.some("push"))),
                 Effect.flatMap(() => pushCurrentBranch(input.cwd, currentBranch)),
               )
-          : { status: "skipped_not_requested" as const };
+          : { result: { status: "skipped_not_requested" as const }, note: null };
+        const push = pushed.result;
 
         const pr = wantsPr
           ? yield* progress
@@ -3356,13 +3372,11 @@ export const make = Effect.gen(function* () {
               )
           : { status: "skipped_not_requested" as const };
 
-        const toast = yield* buildCompletionToast(input.cwd, {
-          action: input.action,
-          branch: branchStep,
-          commit,
-          push,
-          pr,
-        });
+        const toast = yield* buildCompletionToast(
+          input.cwd,
+          { action: input.action, branch: branchStep, commit, push, pr },
+          pushed.note,
+        );
 
         const result = {
           action: input.action,

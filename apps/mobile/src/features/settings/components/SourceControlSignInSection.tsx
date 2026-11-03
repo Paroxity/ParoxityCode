@@ -49,40 +49,58 @@ export function AppSignInRow(props: {
   // The attempt a pending `wait` belongs to; a cancel or a newer attempt makes its outcome stale.
   const attempt = useRef<SourceControlSignInPrompt | null>(null);
   const input = { provider: definition.kind, host };
+  const { label } = definition;
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: `sign out of ${appSignIn.appName}`,
   });
   const [pending, setPending] = useState<SourceControlSignInPrompt | "starting" | null>(null);
 
-  const showCode = (prompt: SourceControlSignInPrompt) => {
-    void Clipboard.setStringAsync(prompt.userCode).catch(() => undefined);
+  const cancelButton = {
+    text: gt("Cancel"),
+    style: "cancel" as const,
+    onPress: () => {
+      attempt.current = null;
+      setPending(null);
+      void cancel({ environmentId, input });
+    },
+  };
+
+  const showPrompt = (prompt: SourceControlSignInPrompt) => {
+    const { userCode } = prompt;
+    if (userCode === undefined) {
+      Dialog.alert(
+        gt("Waiting for approval"),
+        gt(
+          "Approve {app} in your browser. The server finishes signing in even if you leave the app.",
+          { app: appSignIn.appName },
+        ),
+        [cancelButton, { text: gt("Open again"), onPress: () => openUrl(prompt.verificationUri) }],
+      );
+      return;
+    }
+    void Clipboard.setStringAsync(userCode).catch(() => undefined);
     Dialog.alert(
-      prompt.userCode,
+      userCode,
       gt(
         "Enter this code on {host}, then approve {app}. It is copied. The server finishes signing in even if you leave the app.",
-        { host: "GitHub", app: appSignIn.appName },
+        { host: label, app: appSignIn.appName },
       ),
       [
+        cancelButton,
         {
-          text: gt("Cancel"),
-          style: "cancel",
-          onPress: () => {
-            attempt.current = null;
-            setPending(null);
-            void cancel({ environmentId, input });
-          },
-        },
-        {
-          text: gt("Open {host}", { host: "GitHub" }),
+          text: gt("Open {host}", { host: label }),
           onPress: () => openUrl(prompt.verificationUri),
         },
       ],
     );
   };
 
-  const signIn = async () => {
+  const signIn = async (account?: string) => {
     setPending("starting");
-    const started = await start({ environmentId, input });
+    const started = await start({
+      environmentId,
+      input: { ...input, ...(account !== undefined && { account }) },
+    });
     if (started._tag !== "Success") {
       setPending(null);
       Dialog.alert(gt("Could not start the sign-in"), failureMessage(started.cause));
@@ -91,7 +109,8 @@ export function AppSignInRow(props: {
     const prompt = started.value;
     attempt.current = prompt;
     setPending(prompt);
-    showCode(prompt);
+    if (prompt.userCode === undefined) openUrl(prompt.verificationUri);
+    else showPrompt(prompt);
     const finished = await wait({ environmentId, input });
     if (attempt.current !== prompt) return;
     attempt.current = null;
@@ -112,22 +131,41 @@ export function AppSignInRow(props: {
       },
     });
 
+  const askForAccount = (account: NonNullable<SourceControlAppSignIn["account"]>) =>
+    Dialog.prompt({
+      title: gt("Sign in to {host}", { host: label }),
+      message: account.label,
+      placeholder: account.placeholder,
+      initialValue: "",
+      confirmText: gt("Continue"),
+      onConfirm: (value) => {
+        if (value.trim() !== "") void signIn(value.trim());
+      },
+    });
+
   const onPress = () => {
     if (signedIn) {
+      const { installUrl } = appSignIn;
       Dialog.alert(
         appSignIn.appName,
-        gt(
-          "Signed in. {host} requests use the app's higher rate limit, in repositories where the app is installed.",
-          { host: "GitHub" },
-        ),
+        installUrl === undefined
+          ? gt("Signed in.")
+          : gt(
+              "Signed in. {host} requests use the app's higher rate limit, in repositories where the app is installed.",
+              { host: label },
+            ),
         [
-          { text: gt("Install on an organization"), onPress: () => openUrl(appSignIn.installUrl) },
+          ...(installUrl === undefined
+            ? []
+            : [{ text: gt("Install on an organization"), onPress: () => openUrl(installUrl) }]),
           { text: gt("Sign out"), style: "destructive", onPress: signOut },
           { text: gt("Cancel"), style: "cancel" },
         ],
       );
     } else if (pending !== null && pending !== "starting") {
-      showCode(pending);
+      showPrompt(pending);
+    } else if (pending === null && appSignIn.account !== undefined) {
+      askForAccount(appSignIn.account);
     } else if (pending === null) {
       void signIn();
     }
@@ -142,9 +180,11 @@ export function AppSignInRow(props: {
           ? gt("Signed in")
           : pending === "starting"
             ? gt("Starting…")
-            : pending !== null
-              ? gt("Enter {code}", { code: pending.userCode })
-              : gt("Sign in")
+            : pending === null
+              ? gt("Sign in")
+              : pending.userCode === undefined
+                ? gt("Waiting for approval")
+                : gt("Enter {code}", { code: pending.userCode })
       }
       disabled={props.disabled}
       onPress={onPress}
