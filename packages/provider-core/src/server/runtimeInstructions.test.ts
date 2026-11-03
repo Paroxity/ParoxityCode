@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import { assert, describe, it } from "@effect/vitest";
 
 import {
@@ -5,6 +10,19 @@ import {
   buildRuntimeInstructions,
   PULL_REQUEST_LINKING_INSTRUCTIONS,
 } from "./runtimeInstructions.ts";
+
+function makeTree(paths: ReadonlyArray<string>, files: Readonly<Record<string, string>> = {}) {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-runtime-vcs-"));
+  for (const path of paths) NodeFS.mkdirSync(NodePath.join(root, path), { recursive: true });
+  for (const [path, text] of Object.entries(files)) {
+    NodeFS.mkdirSync(NodePath.dirname(NodePath.join(root, path)), { recursive: true });
+    NodeFS.writeFileSync(NodePath.join(root, path), text);
+  }
+  return {
+    root,
+    [Symbol.dispose]: () => NodeFS.rmSync(root, { recursive: true, force: true }),
+  };
+}
 
 describe("buildRuntimeInstructions", () => {
   it("leaves PR linking to a session that already carries it, and keeps runtime identity", () => {
@@ -153,5 +171,22 @@ describe("buildRuntimeInstructions", () => {
     assert.isAbove(shown, 0);
     assert.include(block, `\n- Not listed: ${128 - shown} more\n</workspace_folders>`);
     assert.isBelow(new TextEncoder().encode(block).length, 4000);
+  });
+
+  it("adds jj guidance only where the nearest marker is an unpinned .jj", () => {
+    using tree = makeTree(
+      ["repo/.jj", "repo/.git", "repo/src", "repo/vendor/lib/.git", "pinned/.jj", "plain/.git"],
+      { "pinned/.t3code/vcs.json": JSON.stringify({ vcs: { kind: "git" } }) },
+    );
+    const hasJj = (cwd: string | null) =>
+      buildRuntimeInstructions({ harness: "Codex", cwd }).includes("<version_control>");
+
+    assert.isTrue(hasJj(NodePath.join(tree.root, "repo")));
+    assert.isTrue(hasJj(NodePath.join(tree.root, "repo/src")));
+    assert.isFalse(hasJj(NodePath.join(tree.root, "repo/vendor/lib")));
+    assert.isFalse(hasJj(NodePath.join(tree.root, "pinned")));
+    assert.isFalse(hasJj(NodePath.join(tree.root, "plain")));
+    assert.isFalse(hasJj(NodePath.join(tree.root, "missing")));
+    assert.isFalse(hasJj(null));
   });
 });
