@@ -37,6 +37,28 @@ function status(overrides: Partial<VcsStatusResult> = {}): VcsStatusResult {
 }
 
 describe("jj wording and unsupported repositories", () => {
+  it("offers a push that replaces the bookmark's earlier pushed versions", () => {
+    const amended = status({
+      vcs: { kind: "jj" },
+      aheadCount: 2,
+      rewritesUpstream: true,
+      pr: {
+        number: 1,
+        title: "Stack",
+        url: "https://github.com/a/b/pull/1",
+        state: "open",
+        baseRef: "main",
+        headRef: "feature/test",
+      },
+    });
+    assert.deepEqual(resolveQuickAction(amended, false), {
+      label: "Push rewrite",
+      disabled: false,
+      kind: "run_action",
+      action: "push",
+    });
+  });
+
   it("names why a dirty jj Push is disabled instead of the working-copy changes", () => {
     const dirty = status({
       hasWorkingTreeChanges: true,

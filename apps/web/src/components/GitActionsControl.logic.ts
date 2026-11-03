@@ -509,7 +509,9 @@ export function resolveQuickAction(
   if (isAhead) {
     if (hasOpenPr || isDefaultRef) {
       return {
-        label: resolve(msg("Push", { $context: "verb, git action" })),
+        label: gitStatus.rewritesUpstream
+          ? resolve(msg("Push rewrite", { $context: "verb, replaces the pushed versions" }))
+          : resolve(msg("Push", { $context: "verb, git action" })),
         disabled: false,
         kind: "run_action",
         action: isDefaultRef ? "commit_push" : "push",

@@ -32,7 +32,10 @@ import {
   type AddProjectRemoteSource,
   type AddProjectRemoteSourceReadiness,
 } from "@t3tools/client-runtime/operations/projects";
-import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import {
+  newRepositoryVisibility,
+  sourceControlClients,
+} from "@t3tools/client-runtime/source-control-clients";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import {
@@ -2540,10 +2543,16 @@ function OpenCommandPaletteDialog(props: {
                 searchTerms: [],
                 title:
                   newProjectPublishTargets.length > 1
-                    ? gt("Create private repository")
-                    : gt("Create private repository on {host}", {
-                        host: newProjectPublishTarget.definition.label,
-                      }),
+                    ? newRepositoryVisibility(newProjectPublishTarget.definition) === "public"
+                      ? gt("Create public repository")
+                      : gt("Create private repository")
+                    : newRepositoryVisibility(newProjectPublishTarget.definition) === "public"
+                      ? gt("Create public repository on {host}", {
+                          host: newProjectPublishTarget.definition.label,
+                        })
+                      : gt("Create private repository on {host}", {
+                          host: newProjectPublishTarget.definition.label,
+                        }),
                 description:
                   newProjectName.length > 0
                     ? getNewProjectRepository(newProjectPublishTarget, newProjectPathPreview)

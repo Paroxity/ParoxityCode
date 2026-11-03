@@ -76,6 +76,8 @@ export const PullRequestAction = Schema.Literals([
   "disable-auto-merge",
   "revert",
   "approve-workflows",
+  /** Submit the source branch's current head as a new round, for a host that keeps rounds. */
+  "resubmit",
 ]);
 export type PullRequestAction = typeof PullRequestAction.Type;
 
@@ -253,6 +255,27 @@ export const PullRequestCommit = Schema.Struct({
 });
 export type PullRequestCommit = typeof PullRequestCommit.Type;
 
+/** One immutable submission of a change request; later rounds replace earlier ones. */
+export const PullRequestRound = Schema.Struct({
+  number: PositiveInt,
+  headSha: TrimmedNonEmptyString,
+  baseSha: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+  author: Schema.optional(PullRequestActor),
+});
+export type PullRequestRound = typeof PullRequestRound.Type;
+
+/** One round's own diff, or with `since` what changed after that earlier round. */
+export const PullRequestRoundSelection = Schema.Struct({
+  number: PositiveInt,
+  since: Schema.optional(PositiveInt),
+}).check(
+  Schema.makeFilter(({ number, since }) =>
+    since === undefined || since < number ? undefined : "since must name an earlier round",
+  ),
+);
+export type PullRequestRoundSelection = typeof PullRequestRoundSelection.Type;
+
 export const PullRequestReviewCapabilities = Schema.Struct({
   inlineComment: Schema.Boolean,
   /**
@@ -322,6 +345,8 @@ export const PullRequestCapabilities = Schema.Struct({
   checksAlwaysReport: Schema.optional(Schema.Boolean),
   /** The diff can read one file the paged diff withheld as too large (`PullRequestDiffInput.path`). */
   withheldFileDiff: Schema.optional(Schema.Boolean),
+  /** Resubmissions are kept as rounds whose diffs, and the changes between them, can be read. */
+  rounds: Schema.optional(Schema.Boolean),
 });
 export type PullRequestCapabilities = typeof PullRequestCapabilities.Type;
 
@@ -714,6 +739,8 @@ export const PullRequestActivity = Schema.Struct({
   // Apart from reviewThreads so clients that require a thread path still decode the activity.
   overviewThreads: Schema.optional(Schema.Array(PullRequestOverviewThread)),
   commits: Schema.Array(PullRequestCommit),
+  /** Absent where the host keeps no rounds. */
+  rounds: Schema.optional(Schema.Array(PullRequestRound)),
   reactions: Schema.optional(Schema.Array(PullRequestReaction)),
 });
 export type PullRequestActivity = typeof PullRequestActivity.Type;
@@ -733,6 +760,13 @@ export const PullRequestDetailView = Schema.Struct({
 });
 export type PullRequestDetailView = typeof PullRequestDetailView.Type;
 
+const onePinnedDiff = Schema.makeFilter(
+  (input: { readonly commit?: string | undefined; readonly round?: unknown }) =>
+    input.commit === undefined || input.round === undefined
+      ? undefined
+      : "a diff names one commit or one round, not both",
+);
+
 /** GitHub refuses diffs past 300 files, so callers must page large changes. */
 export const PullRequestDiffInput = Schema.Struct({
   ...PullRequestRef.fields,
@@ -740,7 +774,9 @@ export const PullRequestDiffInput = Schema.Struct({
   commit: Schema.optional(TrimmedNonEmptyString),
   /** Reads one file the paged diff withheld as too large; ignores `cursor`. */
   path: Schema.optional(TrimmedNonEmptyString),
-});
+  /** Only for a host whose capabilities include `rounds`. */
+  round: Schema.optional(PullRequestRoundSelection),
+}).check(onePinnedDiff);
 export type PullRequestDiffInput = typeof PullRequestDiffInput.Type;
 
 export const PullRequestOmittedFileStat = Schema.Struct({
@@ -764,10 +800,11 @@ export type PullRequestDiffResult = typeof PullRequestDiffResult.Type;
 export const PullRequestDiffFileContentsInput = Schema.Struct({
   ...PullRequestRef.fields,
   commit: Schema.optional(TrimmedNonEmptyString),
+  round: Schema.optional(PullRequestRoundSelection),
   changeType: Schema.Literals(["change", "rename-pure", "rename-changed", "new", "deleted"]),
   oldPath: Schema.NonEmptyString,
   newPath: Schema.NonEmptyString,
-});
+}).check(onePinnedDiff);
 export type PullRequestDiffFileContentsInput = typeof PullRequestDiffFileContentsInput.Type;
 
 export const PullRequestDiffFileContentsResult = Schema.Struct({
