@@ -4,6 +4,7 @@ import {
   ProjectId,
   type PullRequestListEntry,
   type PullRequestSummary,
+  type PullRequestRoundSelection,
 } from "@t3tools/contracts";
 import { RegistryContext, useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
@@ -31,7 +32,10 @@ export type PullRequestParams = {
   readonly initialSummary?: PullRequestListEntry | PullRequestSummary;
 };
 
-export type PullRequestDiffParams = PullRequestParams & { readonly commit?: string };
+export type PullRequestDiffParams = PullRequestParams & {
+  readonly commit?: string;
+  readonly round?: PullRequestRoundSelection;
+};
 
 export function pullRequestTarget(params: PullRequestParams) {
   return {
@@ -115,7 +119,11 @@ export function usePullRequestDiff(
   const reference = pullRequestTarget(params);
   const target = {
     ...reference,
-    input: { ...reference.input, ...(params.commit ? { commit: params.commit } : {}) },
+    input: {
+      ...reference.input,
+      ...(params.commit ? { commit: params.commit } : {}),
+      ...(params.round ? { round: params.round } : {}),
+    },
   };
   const key = JSON.stringify(target);
   const firstPageAtom = composerPullRequests.diff(target);

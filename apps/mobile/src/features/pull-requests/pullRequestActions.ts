@@ -66,6 +66,8 @@ export function pullRequestActionLabel(
       return "Delete branch";
     case "approve-workflows":
       return "Approve workflows";
+    case "resubmit":
+      return "Resubmit";
   }
 }
 
@@ -81,6 +83,7 @@ export const PR_ACTION_ICONS = {
   revert: "arrow.uturn.backward",
   "delete-branch": "trash",
   "approve-workflows": "checkmark",
+  resubmit: PullRequestGlyph.pullRequest,
 } as const satisfies Record<PullRequestAction, AppSymbolName>;
 
 export function allowedMergeMethods(pr: ActionDetail) {

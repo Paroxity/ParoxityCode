@@ -1,3 +1,4 @@
+import { pullRequestRoundEndsAtHead } from "@t3tools/client-runtime/pull-request-rounds";
 import {
   isFileDiffCollapsed,
   withFileDiffFold,
@@ -102,6 +103,7 @@ import { useAppearanceCodeSurface } from "../settings/appearance/useAppearanceCo
 import { useNativeReviewDiffBridge } from "../review/useNativeReviewDiffBridge";
 import { pullRequestTimelineRows } from "./PullRequestTimeline";
 import { PullRequestActionToolbar, PullRequestCardGroup } from "./PullRequestControls";
+import { pullRequestDiffScope } from "./pullRequestDiffScope";
 import {
   pullRequestTarget as requestTarget,
   usePullRequestDiff,
@@ -947,7 +949,7 @@ export function PullRequestFileRouteScreen(props: PullRequestFileRouteProps) {
     useNavigation<NativeStackNavigationProp<ReactNavigation.RootParamList, "PullRequestFile">>();
   const ready = usePullRequestDiffEntry(navigation);
   if (ready) return <PullRequestFileRouteContent {...props} />;
-  const title = props.route.params.commit ? "Commit changes" : "Changes";
+  const title = pullRequestDiffScope(props.route.params).title;
   return (
     <View className="flex-1 bg-screen">
       <AppBar title={title} onBack={() => navigation.goBack()} />
@@ -964,7 +966,13 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
   const contentTopInset = useContentTopInset();
   const [toolbarHeight, setToolbarHeight] = usePullRequestToolbarHeight(insets.bottom);
   const commit = route.params.commit;
+  const pinned = Boolean(commit) || route.params.round !== undefined;
+  const diffScope = pullRequestDiffScope(route.params);
   const detail = useEnvironmentQuery(composerPullRequests.detail(requestTarget(route.params)));
+  const activity = useEnvironmentQuery(composerPullRequests.activity(requestTarget(route.params)));
+  // A tick stamps the head's version, so a diff that stops short of the head keeps its ticks here.
+  const localTicks =
+    Boolean(commit) || !pullRequestRoundEndsAtHead(activity.data?.rounds, route.params.round);
   const terminology = sourceControlClients.get(
     (detail.data ?? route.params.initialSummary)?.provider,
   ).changeRequest;
@@ -989,47 +997,46 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
   const { loadMore } = result;
   const parsed = filter.parsed;
   const reviewDraft = usePullRequestReviewDraft(route.params);
-  const viewed = usePullRequestFilesViewed(route.params, commit ? null : detail.data);
-  const [commitViewedPaths, setCommitViewedPaths] = useState<ReadonlySet<string>>(() => new Set());
+  const viewed = usePullRequestFilesViewed(route.params, localTicks ? null : detail.data);
+  const [localViewedPaths, setLocalViewedPaths] = useState<ReadonlySet<string>>(() => new Set());
   const permissions = usePullRequestPermissions(route.params, detail.data);
   const scopeKey = pullRequestReviewKey(route.params);
   const [diffHead, setDiffHead] = useState({ scopeKey, sha: detail.data?.headSha ?? null });
   if (diffHead.scopeKey !== scopeKey || (!diffHead.sha && detail.data?.headSha))
     setDiffHead({ scopeKey, sha: detail.data?.headSha ?? null });
   const staleDiff = Boolean(
-    !commit && diffHead.sha && detail.data?.headSha && diffHead.sha !== detail.data.headSha,
+    !pinned && diffHead.sha && detail.data?.headSha && diffHead.sha !== detail.data.headSha,
   );
   const canCommentOnDiff =
     permissions.canInlineComment &&
-    !commit &&
+    !pinned &&
     !staleDiff &&
     !detail.isPending &&
     !result.isPending &&
     !result.withheldRefetching &&
     !result.error;
-  const activity = useEnvironmentQuery(composerPullRequests.activity(requestTarget(route.params)));
   const baseData = useMemo(() => getCachedNativeReviewDiffData({ parsedDiff: parsed }), [parsed]);
   const highlightFiles = usePullRequestDiffHighlightFiles(route.params, parsed, baseData.files);
   const data = useMemo(
     () =>
       annotatePullRequestDiff(
         { ...baseData, files: highlightFiles },
-        staleDiff || commit ? [] : (activity.data?.reviewThreads ?? []),
-        commit ? [] : reviewDraft.draft.comments,
+        staleDiff || pinned ? [] : (activity.data?.reviewThreads ?? []),
+        pinned ? [] : reviewDraft.draft.comments,
         diffHead.sha ?? undefined,
       ),
     [
       baseData,
       highlightFiles,
       staleDiff,
-      commit,
+      pinned,
       activity.data?.reviewThreads,
       reviewDraft.draft.comments,
       diffHead.sha,
     ],
   );
   const viewedIds = data.files
-    .filter((file) => (commit ? commitViewedPaths.has(file.path) : viewed.isViewed(file.path)))
+    .filter((file) => (localTicks ? localViewedPaths.has(file.path) : viewed.isViewed(file.path)))
     .map((file) => file.id);
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const selectedRow = data.rows.find((row) => row.id === selectedRowId);
@@ -1147,7 +1154,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
   const { themeAppearance, appearance, setCodeWordBreak } = useAppearancePreferences();
   const bridge = useNativeReviewDiffBridge({
     threadKey: null,
-    sectionId: `pull-request:${route.params.repository}:${route.params.number}:${commit ?? "all"}`,
+    sectionId: `pull-request:${route.params.repository}:${route.params.number}:${diffScope.key}`,
     diff: result.patch,
     data,
     collapsedFileIds: collapsedIds,
@@ -1192,7 +1199,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
     setSelectedRowId(null);
     filter.toggle();
   };
-  const title = commit ? "Commit changes" : "Changes";
+  const title = diffScope.title;
   const seekingFile = !targetFile && result.nextCursor !== null;
   const loadingDiff = (result.isPending && !data.rows.length) || (seekingFile && !result.error);
   return (
@@ -1337,10 +1344,10 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
                 }}
                 onToggleViewedFile={(event) => {
                   const file = data.files.find((file) => file.id === event.nativeEvent.fileId);
-                  if (!file || (!commit && !viewed.canToggle)) return;
+                  if (!file || (!localTicks && !viewed.canToggle)) return;
                   setFoldChoices((current) => withFileDiffFold(current, file.id, undefined));
-                  if (commit)
-                    setCommitViewedPaths((current) => {
+                  if (localTicks)
+                    setLocalViewedPaths((current) => {
                       const next = new Set(current);
                       if (next.has(file.path)) next.delete(file.path);
                       else next.add(file.path);
@@ -1378,7 +1385,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
                 contentWidth={NATIVE_REVIEW_DIFF_CONTENT_WIDTH}
                 contentInsetTop={staleDiff ? 0 : contentTopInset}
                 contentInsetBottom={Platform.OS === "android" ? toolbarHeight : insets.bottom}
-                contentResetKey={`pull-request:${route.params.environmentId}:${route.params.repository}:${route.params.number}:${commit ?? "all"}`}
+                contentResetKey={`pull-request:${route.params.environmentId}:${route.params.repository}:${route.params.number}:${diffScope.key}`}
               />
             </View>
           ) : filter.hiddenCount > 0 &&
