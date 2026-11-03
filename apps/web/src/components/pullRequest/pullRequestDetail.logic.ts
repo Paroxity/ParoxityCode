@@ -18,12 +18,12 @@ import {
   PullRequestDetail,
   PullRequestOperationError,
   type PullRequestAction,
+  type PullRequestActivity,
   type PullRequestActor,
   type PullRequestBaseComparison,
   type PullRequestCheck,
   type PullRequestChecksState as ContractPullRequestChecksState,
   type PullRequestComment,
-  type PullRequestActivity,
   type PullRequestCommit,
   type PullRequestContextMetadata,
   type PullRequestDetailView,
@@ -153,6 +153,38 @@ export function loadingPullRequestCheckoutCommand(
     return null;
   }
   return command;
+}
+
+/** The activity half of a detail view; before activity loads, its lists are empty. */
+export function pullRequestActivityView(
+  detail: Pick<PullRequestDetailView, "author" | "reviewers">,
+  activity: PullRequestActivity | null | undefined,
+) {
+  return {
+    author: activity?.author ?? detail.author,
+    reviewers: activity?.reviewers ?? detail.reviewers,
+    comments: activity?.comments ?? [],
+    commentCount: Math.max(
+      activity?.commentCount ?? 0,
+      new Set([
+        ...(activity?.comments.map((comment) => comment.id) ?? []),
+        ...(activity?.reviewThreads.flatMap((thread) =>
+          thread.comments.map((comment) => comment.id),
+        ) ?? []),
+      ]).size,
+    ),
+    commentsTruncated: activity?.commentsTruncated ?? false,
+    reviewThreads: activity?.reviewThreads ?? [],
+    ...(activity?.overviewThreads === undefined
+      ? {}
+      : { overviewThreads: activity.overviewThreads }),
+    commits: activity?.commits ?? [],
+    reactions: activity?.reactions ?? [],
+    ...(activity?.reviewThreadsTruncated === undefined
+      ? {}
+      : { reviewThreadsTruncated: activity.reviewThreadsTruncated }),
+    ...(activity?.rounds === undefined ? {} : { rounds: activity.rounds }),
+  };
 }
 
 export function shouldRefreshPullRequestActivity(
@@ -1599,6 +1631,7 @@ const ACTION_NEEDS_HOST_REFRESH: Record<PullRequestAction, boolean> = {
   revert: false,
   "delete-branch": false,
   "approve-workflows": true,
+  resubmit: true,
 };
 
 export function pullRequestActionNeedsHostRefresh(action: PullRequestAction): boolean {

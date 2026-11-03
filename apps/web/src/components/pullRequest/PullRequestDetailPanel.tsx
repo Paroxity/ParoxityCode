@@ -203,6 +203,12 @@ const actionFailureLabels = (term: ChangeRequestTermKind): Record<PullRequestAct
   ),
   "delete-branch": m(msg("Could not delete this branch")),
   "approve-workflows": m(msg("Could not approve workflows")),
+  resubmit: m(
+    msg(
+      "Could not resubmit this {term, select, mr {merge request} cr {change request} other {pull request}}",
+      { term },
+    ),
+  ),
 });
 
 const actionFailureHints = (term: ChangeRequestTermKind): Record<PullRequestAction, string> => ({
@@ -246,6 +252,12 @@ const actionFailureHints = (term: ChangeRequestTermKind): Record<PullRequestActi
   "approve-workflows": m(
     msg(
       "The host refused it. Check that you have Actions write access and that these workflow runs are still awaiting approval.",
+    ),
+  ),
+  resubmit: m(
+    msg(
+      "The host refused it. Check that you opened this {term, select, mr {merge request} cr {change request} other {pull request}} and that its branch has commits the latest round lacks.",
+      { term },
     ),
   ),
 });
@@ -470,14 +482,21 @@ export function PullRequestDetailPanel({
     className: cn("absolute inset-0", value !== tab && "invisible"),
   });
   const [codeToolbarContainer, setCodeToolbarContainer] = useState<HTMLDivElement | null>(null);
+  // A commit belongs to the latest round, so picking either one resets the other.
   const [codeCommitScope, setCodeCommitScope] = useState<{
     readonly pullRequestKey: string;
     readonly oid: string | null;
-  }>(() => ({ pullRequestKey, oid: pullRequestLinkCommit(revealUrl) }));
-  const selectedCodeCommitOid =
-    codeCommitScope.pullRequestKey === pullRequestKey ? codeCommitScope.oid : null;
+    readonly roundKey: string | null;
+  }>(() => ({ pullRequestKey, oid: pullRequestLinkCommit(revealUrl), roundKey: null }));
+  const codeScope =
+    codeCommitScope.pullRequestKey === pullRequestKey
+      ? codeCommitScope
+      : { oid: null, roundKey: null };
   const selectCodeCommit = (oid: string | null) => {
-    setCodeCommitScope({ pullRequestKey, oid });
+    setCodeCommitScope({ pullRequestKey, oid, roundKey: null });
+  };
+  const selectCodeRound = (roundKey: string) => {
+    setCodeCommitScope({ pullRequestKey, oid: null, roundKey });
   };
   const openCommit = (oid: string) => {
     selectCodeCommit(oid);
@@ -2276,8 +2295,10 @@ export function PullRequestDetailPanel({
                     environmentId={environmentId}
                     reference={reference}
                     detail={detail}
-                    selectedCommitOid={selectedCodeCommitOid}
+                    selectedCommitOid={codeScope.oid}
                     onSelectedCommitChange={selectCodeCommit}
+                    selectedRoundKey={codeScope.roundKey}
+                    onSelectedRoundChange={selectCodeRound}
                     pendingFinding={handoff}
                     fixFindingLabel={handoffLabels.fixFinding}
                     {...(canFixFindings ? { onFixFinding: startFixFinding } : {})}

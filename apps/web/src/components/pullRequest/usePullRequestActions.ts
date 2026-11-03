@@ -105,6 +105,7 @@ const actionSuccessLabels = (term: ChangeRequestTermKind): Record<PullRequestAct
   ),
   "delete-branch": m(msg("Branch deleted")),
   "approve-workflows": m(msg("Workflows approved")),
+  resubmit: m(msg("Resubmitted as a new round")),
 });
 
 const actionFailureLabels = (term: ChangeRequestTermKind): Record<PullRequestAction, string> => ({
@@ -139,6 +140,12 @@ const actionFailureLabels = (term: ChangeRequestTermKind): Record<PullRequestAct
   ),
   "delete-branch": m(msg("Could not delete this branch")),
   "approve-workflows": m(msg("Could not approve workflows")),
+  resubmit: m(
+    msg(
+      "Could not resubmit this {term, select, mr {merge request} cr {change request} other {pull request}}",
+      { term },
+    ),
+  ),
 });
 
 const actionFailureHints = (term: ChangeRequestTermKind): Record<PullRequestAction, string> => ({
@@ -180,6 +187,12 @@ const actionFailureHints = (term: ChangeRequestTermKind): Record<PullRequestActi
   "approve-workflows": m(
     msg(
       "The host refused it. Check that you have Actions write access and that these workflow runs are still awaiting approval.",
+    ),
+  ),
+  resubmit: m(
+    msg(
+      "The host refused it. Check that you opened this {term, select, mr {merge request} cr {change request} other {pull request}} and that its branch has commits the latest round lacks.",
+      { term },
     ),
   ),
 });

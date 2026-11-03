@@ -254,6 +254,8 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     PUBLISH_PROVIDER_OPTIONS.find((option) => option.value === provider) ??
     PUBLISH_PROVIDER_OPTIONS[0]!;
   const providerReady = readinessByProvider(provider).ready;
+  const publicRepositoriesOnly = sourceControlClients.get(provider).publicRepositoriesOnly === true;
+  const effectiveVisibility = publicRepositoriesOnly ? "public" : visibility;
 
   const signedInProvider = discoveredProviders?.find((entry) => entry.kind === provider);
   const signedInAccount = signedInProvider ? Option.getOrNull(signedInProvider.auth.account) : null;
@@ -276,7 +278,7 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
       const result = await publishRepositoryAction.run({
         provider,
         repository: repositoryPath,
-        visibility,
+        visibility: effectiveVisibility,
         remoteName: remoteName.trim() || "origin",
         protocol,
       });
@@ -307,7 +309,7 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     void navigate({ to: "/settings/source-control" });
   };
 
-  const visibilityHint = VISIBILITY_HINTS[visibility];
+  const visibilityHint = VISIBILITY_HINTS[effectiveVisibility];
   const isPending = publishRepositoryAction.isPending;
 
   return (
@@ -449,16 +451,18 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
                   <ToggleGroup
                     className="w-full"
                     aria-label={gt("Visibility")}
-                    value={[visibility]}
+                    value={[effectiveVisibility]}
                     onValueChange={(next) => {
                       const value = next[0];
                       if (value === "private" || value === "public") setVisibility(value);
                     }}
                     disabled={isPending}
                   >
-                    <Toggle className="flex-1" value="private">
-                      {gt("Private")}
-                    </Toggle>
+                    {publicRepositoriesOnly ? null : (
+                      <Toggle className="flex-1" value="private">
+                        {gt("Private")}
+                      </Toggle>
+                    )}
                     <Toggle className="flex-1" value="public">
                       {gt("Public")}
                     </Toggle>
