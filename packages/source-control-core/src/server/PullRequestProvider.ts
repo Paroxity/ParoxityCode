@@ -39,6 +39,8 @@ import type {
   PullRequestLabelCandidateList,
   PullRequestState,
   PullRequestPreview,
+  PullRequestRound,
+  PullRequestRoundSelection,
   PullRequestUpdateMethod,
   PullRequestViewerPermissions,
   SourceControlProviderKind,
@@ -486,6 +488,11 @@ export interface PullRequestProviderApi {
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<ProviderChangeRequestActivity, PullRequestProviderError>;
 
+  /** Every round in order, numbered from 1. Required for `capabilities.rounds`. */
+  readonly listRounds?: (
+    input: ProviderRepositoryRef & { readonly number: number },
+  ) => Effect.Effect<ReadonlyArray<PullRequestRound>, PullRequestProviderError>;
+
   readonly getReviewThreadComments?: (
     input: ProviderRepositoryRef & {
       readonly number: number;
@@ -508,6 +515,8 @@ export interface PullRequestProviderApi {
       readonly cursor?: string | undefined;
       readonly commit?: string | undefined;
       readonly path?: string | undefined;
+      /** Sent only when `capabilities.rounds`, and never beside `commit`. */
+      readonly round?: PullRequestRoundSelection | undefined;
     },
   ) => Effect.Effect<ProviderDiffSlice, PullRequestProviderError>;
 
@@ -517,6 +526,7 @@ export interface PullRequestProviderApi {
       readonly number: number;
       readonly cursor?: string | undefined;
       readonly commit?: string | undefined;
+      readonly round?: PullRequestRoundSelection | undefined;
     },
   ) => Effect.Effect<ProviderDiffFilePaths, PullRequestProviderError>;
 
@@ -524,6 +534,7 @@ export interface PullRequestProviderApi {
     input: ProviderRepositoryRef & {
       readonly number: number;
       readonly commit?: string | undefined;
+      readonly round?: PullRequestRoundSelection | undefined;
       readonly changeType: "change" | "rename-pure" | "rename-changed" | "new" | "deleted";
       readonly oldPath: string;
       readonly newPath: string;
