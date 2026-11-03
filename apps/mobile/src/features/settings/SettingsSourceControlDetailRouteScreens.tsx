@@ -91,7 +91,7 @@ export function SettingsSourceControlProviderRouteScreen({
   const canUpdate = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const item = discovery.data?.sourceControlProviders.find((entry) => entry.kind === kind);
   const credentials = definition?.credentials;
-  const appSignIn = item?.appSignIn === true ? credentials?.appSignIn : undefined;
+  const appSignIn = item?.appSignIn === true ? definition?.appSignIn : undefined;
   const disabled = !canWrite || !canUpdate;
   return (
     <DetailPage
