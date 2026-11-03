@@ -64,6 +64,8 @@ export type SourceControlCliDiscoverySpec = SourceControlDiscoverySpecBase & {
 export type SourceControlApiDiscoverySpec = SourceControlDiscoverySpecBase & {
   readonly type: "api";
   readonly probeAuth: Effect.Effect<SourceControlProviderAuth, never>;
+  /** The host's definition has an `appSignIn` this server can run. */
+  readonly appSignIn?: boolean;
 };
 
 export type SourceControlManagedCliDiscoverySpec = SourceControlDiscoverySpecBase & {
@@ -279,6 +281,7 @@ export function probeSourceControlProvider(input: {
             installHint: input.spec.installHint,
             detail: Option.none<string>(),
             auth,
+            ...(input.spec.type === "api" && input.spec.appSignIn ? { appSignIn: true } : {}),
           }) satisfies SourceControlProviderDiscoveryItem,
       ),
     );

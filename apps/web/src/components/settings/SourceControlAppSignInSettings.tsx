@@ -20,6 +20,8 @@ import { serverEnvironment } from "../../state/server";
 import { sourceControlEnvironment } from "../../state/sourceControl";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button, InlineButton } from "../ui/button";
+import { Input } from "../ui/input";
+import { Label } from "../ui/label";
 import { Spinner } from "../ui/spinner";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 
@@ -99,6 +101,7 @@ export function SourceControlAppSignInSettings({
 }) {
   const gt = useGT();
   const host = appSignIn.hosts[0] ?? "";
+  const accountFormId = `${definition.kind}-app-sign-in-${environmentId}`;
   const { signIns, tokens } = useEnvironmentSettings(environmentId, (settings) =>
     readHostCredentialSettings(settings, definition.kind),
   );
@@ -124,10 +127,17 @@ export function SourceControlAppSignInSettings({
     },
   });
   const [state, setState] = useState<SignInState>({ status: "idle" });
+  const [accountInput, setAccountInput] = useState("");
+  const accountName = accountInput.trim();
+  const needsAccount = appSignIn.account !== undefined && accountName === "";
 
   const signIn = async () => {
     setState({ status: "starting" });
-    const input = { provider: definition.kind, host };
+    const input = {
+      provider: definition.kind,
+      host,
+      ...(appSignIn.account !== undefined && { account: accountName }),
+    };
     const started = await start({ environmentId, input });
     if (started._tag !== "Success") {
       setState({ status: "failed", message: failureMessage(started.cause) });
@@ -135,6 +145,9 @@ export function SourceControlAppSignInSettings({
     }
     const prompt = started.value;
     setState({ status: "waiting", prompt });
+    if (prompt.userCode === undefined) {
+      window.open(prompt.verificationUri, "_blank", "noopener,noreferrer");
+    }
     const finished = await wait({ environmentId, input });
     // A newer attempt, a cancel, or a sign-out owns the state by now.
     setState((current) => {
@@ -161,6 +174,7 @@ export function SourceControlAppSignInSettings({
   };
 
   const waiting = !signedIn && state.status === "waiting" ? state.prompt : null;
+  const userCode = waiting?.userCode;
 
   let subtitle: ReactNode;
   let action: ReactNode;
@@ -172,7 +186,7 @@ export function SourceControlAppSignInSettings({
             Signed in as
             <RedactedSensitiveText
               value={account}
-              ariaLabel={gt("Signed-in GitHub account")}
+              ariaLabel={gt("Signed-in {host} account", { host: definition.label })}
               revealTooltip={gt("Show account")}
               hideTooltip={gt("Hide account")}
             />
@@ -189,7 +203,10 @@ export function SourceControlAppSignInSettings({
       </Button>
     );
   } else if (waiting !== null) {
-    subtitle = gt("Approve the app on GitHub to finish signing in.");
+    subtitle =
+      userCode === undefined
+        ? gt("Approve the sign-in in your browser to finish.")
+        : gt("Approve the app on {host} to finish signing in.", { host: definition.label });
     action = (
       <Button
         size="xs"
@@ -203,15 +220,23 @@ export function SourceControlAppSignInSettings({
       </Button>
     );
   } else {
-    subtitle = gt("A far higher GitHub API rate limit than a personal token or gh login.");
+    // Translates the GitHub definition's English `summary`.
+    subtitle =
+      definition.kind === "github"
+        ? gt("A far higher GitHub API rate limit than a personal token or gh login.")
+        : appSignIn.summary;
     action = (
       <Button
         size="xs"
-        disabled={!canSignIn || state.status === "starting"}
-        onClick={() => void signIn()}
+        type={appSignIn.account === undefined ? "button" : "submit"}
+        form={appSignIn.account === undefined ? undefined : accountFormId}
+        disabled={!canSignIn || state.status === "starting" || needsAccount}
+        onClick={appSignIn.account === undefined ? () => void signIn() : undefined}
       >
         {state.status === "starting" ? <Spinner /> : null}
-        {state.status === "failed" ? gt("Try again") : gt("Sign in with GitHub")}
+        {state.status === "failed"
+          ? gt("Try again")
+          : gt("Sign in with {host}", { host: definition.label })}
       </Button>
     );
   }
@@ -232,15 +257,39 @@ export function SourceControlAppSignInSettings({
         <div className="shrink-0">{action}</div>
       </div>
 
-      {waiting !== null ? (
+      {!signedIn && waiting === null && appSignIn.account !== undefined ? (
+        <form
+          id={accountFormId}
+          className="grid gap-1.5 border-t border-border bg-muted/40 px-3 py-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!needsAccount && state.status !== "starting") void signIn();
+          }}
+        >
+          <Label htmlFor={`${accountFormId}-account`}>{appSignIn.account.label}</Label>
+          <Input
+            id={`${accountFormId}-account`}
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
+            size="sm"
+            placeholder={appSignIn.account.placeholder}
+            value={accountInput}
+            disabled={!canSignIn || state.status === "starting"}
+            onChange={(event) => setAccountInput(event.target.value)}
+          />
+        </form>
+      ) : null}
+
+      {waiting !== null && userCode !== undefined ? (
         <div className="grid gap-4 border-t border-border bg-muted/40 px-3 py-4 sm:grid-cols-[auto_1fr] sm:items-center sm:gap-6">
           <div className="flex items-center gap-2">
-            <DeviceCode code={waiting.userCode} />
+            <DeviceCode code={userCode} />
             <Button
               size="icon-xs"
               variant="ghost"
               aria-label={gt("Copy code")}
-              onClick={() => copyToClipboard(waiting.userCode, undefined)}
+              onClick={() => copyToClipboard(userCode, undefined)}
             >
               {isCopied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
             </Button>
@@ -251,9 +300,11 @@ export function SourceControlAppSignInSettings({
               render={
                 <a href={waiting.verificationUri} target="_blank" rel="noreferrer noopener" />
               }
-              onClick={() => copyToClipboard(waiting.userCode, undefined)}
+              onClick={() => copyToClipboard(userCode, undefined)}
             >
-              <T>Copy code & open GitHub</T>
+              <T>
+                Copy code & open <Var>{definition.label}</Var>
+              </T>
               <ExternalLinkIcon aria-hidden className="size-3.5" />
             </Button>
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -266,7 +317,26 @@ export function SourceControlAppSignInSettings({
         </div>
       ) : null}
 
-      {signedIn ? (
+      {waiting !== null && userCode === undefined ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/40 px-3 py-3">
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span aria-hidden className="size-1.5 rounded-full bg-warning" />
+            <T>
+              Waiting for approval · expires at <Var>{expiryTime(waiting.expiresAt)}</Var>
+            </T>
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            render={<a href={waiting.verificationUri} target="_blank" rel="noreferrer noopener" />}
+          >
+            <T>Open the sign-in page</T>
+            <ExternalLinkIcon aria-hidden className="size-3.5" />
+          </Button>
+        </div>
+      ) : null}
+
+      {signedIn && appSignIn.installUrl !== undefined ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           <span className="min-w-0 flex-1">
             <T>Reaches repositories in accounts and organizations that installed the app.</T>
@@ -274,9 +344,13 @@ export function SourceControlAppSignInSettings({
           <ExternalLink href={appSignIn.installUrl}>
             <T>Install on an organization</T>
           </ExternalLink>
-          <ExternalLink href={appSignIn.revokeUrl}>
-            <T>Manage on GitHub</T>
-          </ExternalLink>
+          {appSignIn.revokeUrl !== undefined ? (
+            <ExternalLink href={appSignIn.revokeUrl}>
+              <T>
+                Manage on <Var>{definition.label}</Var>
+              </T>
+            </ExternalLink>
+          ) : null}
         </div>
       ) : null}
 
