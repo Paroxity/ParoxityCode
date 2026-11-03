@@ -91,7 +91,7 @@ export function SettingsSourceControlProviderRouteScreen({
   const canUpdate = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const item = discovery.data?.sourceControlProviders.find((entry) => entry.kind === kind);
   const credentials = definition?.credentials;
-  const appSignIn = item?.appSignIn === true ? credentials?.appSignIn : undefined;
+  const appSignIn = item?.appSignIn === true ? definition?.appSignIn : undefined;
   const disabled = !canWrite || !canUpdate;
   return (
     <DetailPage
@@ -114,7 +114,11 @@ export function SettingsSourceControlProviderRouteScreen({
           {appSignIn ? (
             <SettingsSection
               title={gt("Sign in", { $context: "settings section title" })}
-              footer={gt("A far higher API rate limit than a personal token or CLI login.")}
+              footer={
+                kind === "github"
+                  ? gt("A far higher API rate limit than a personal token or CLI login.")
+                  : appSignIn.summary
+              }
             >
               <AppSignInRow
                 environment={environment}

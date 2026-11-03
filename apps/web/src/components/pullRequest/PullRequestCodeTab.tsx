@@ -11,6 +11,11 @@ import {
   resolvePullRequestAnchorRange,
 } from "@t3tools/shared/pullRequestAnchor";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import {
+  pullRequestRoundEndsAtHead,
+  pullRequestRoundOptions,
+  selectPullRequestRoundOption,
+} from "@t3tools/client-runtime/pull-request-rounds";
 import type {
   CodeViewItem,
   DiffLineAnnotation,
@@ -122,7 +127,9 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collaps
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -438,6 +445,8 @@ function PullRequestCodeTab({
   detail,
   selectedCommitOid,
   onSelectedCommitChange,
+  selectedRoundKey = null,
+  onSelectedRoundChange,
   pendingFinding,
   fixFindingLabel: requestedFixFindingLabel,
   onFixFinding,
@@ -457,6 +466,8 @@ function PullRequestCodeTab({
   detail: PullRequestDetailView;
   selectedCommitOid: string | null;
   onSelectedCommitChange: (oid: string | null) => void;
+  selectedRoundKey?: string | null;
+  onSelectedRoundChange?: (key: string) => void;
   pendingFinding?: string | null;
   fixFindingLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
@@ -519,7 +530,18 @@ function PullRequestCodeTab({
     selectedCommitOid !== null && detail.commits.some((entry) => entry.oid === selectedCommitOid)
       ? selectedCommitOid
       : null;
-  const scopeKey = JSON.stringify([environmentId, referenceKey, commit]);
+  const roundOptions = pullRequestRoundOptions(
+    detail.capabilities.rounds === true ? detail.rounds : undefined,
+    messages,
+  );
+  const roundOption = selectPullRequestRoundOption(
+    roundOptions,
+    commit === null ? selectedRoundKey : null,
+  );
+  const round = roundOption?.selection ?? null;
+  // Line comments and their threads are anchored to the whole change's coordinates.
+  const wholeChange = commit === null && round === null;
+  const scopeKey = JSON.stringify([environmentId, referenceKey, commit, round]);
   // The panel keeps this mounted across pull requests, so an open composer would otherwise
   // survive the switch and attach its comment to whichever one is on screen when it is sent.
   const [stateScopeKey, setStateScopeKey] = useState(scopeKey);
@@ -544,6 +566,7 @@ function PullRequestCodeTab({
         ...reference,
         ...(cursor === null ? {} : { cursor }),
         ...(commit === null ? {} : { commit }),
+        ...(round === null ? {} : { round }),
       },
     }),
     messages,
@@ -602,7 +625,11 @@ function PullRequestCodeTab({
   const refreshFirstDiffPage = useAtomRefresh(
     pullRequestEnvironment.diff({
       environmentId,
-      input: { ...reference, ...(commit === null ? {} : { commit }) },
+      input: {
+        ...reference,
+        ...(commit === null ? {} : { commit }),
+        ...(round === null ? {} : { round }),
+      },
     }),
   );
   const reviewKey = referenceKey;
@@ -632,7 +659,6 @@ function PullRequestCodeTab({
   const {
     setViewed,
     refresh: refreshFilesViewed,
-    enabled: filesViewedEnabled,
     isViewed: isFileViewed,
     isStale: isFileViewedStale,
   } = filesViewed;
@@ -643,13 +669,19 @@ function PullRequestCodeTab({
     readonly shownKeys: ReadonlyMap<string, string>;
   }>({ scope: "", paths: NO_PATHS, shownKeys: new Map() });
   const withheldPaths = withheldLoads.scope === scopeKey ? withheldLoads.paths : NO_PATHS;
-  const withheldInput = { ...reference, ...(commit === null ? {} : { commit }) };
+  const withheldInput = {
+    ...reference,
+    ...(commit === null ? {} : { commit }),
+    ...(round === null ? {} : { round }),
+  };
   const atomRegistry = useContext(RegistryContext);
   const withheldFileDiff = (path: string) =>
     pullRequestEnvironment.diff({ environmentId, input: { ...withheldInput, path } });
   const refreshWithheldFiles = useEffectEvent(() => {
     for (const path of withheldPaths) atomRegistry.refresh(withheldFileDiff(path));
   });
+  const filesViewedEnabled =
+    filesViewed.enabled && pullRequestRoundEndsAtHead(detail.rounds, round);
   const appliedRefreshToken = useRef(refreshToken);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a new refresh token clears loaded slices and refetches the first diff page and viewed files
   useEffect(() => {
@@ -682,7 +714,8 @@ function PullRequestCodeTab({
     environmentId,
     reference,
     commit,
-    cacheKey: `pull-request:${referenceKey}:${detail.updatedAt}:${commit ?? "all"}`,
+    round,
+    cacheKey: `pull-request:${referenceKey}:${detail.updatedAt}:${commit ?? roundOption?.key ?? "all"}`,
   });
   const completionScope = pullRequestCompletionScope(detail, environmentId, reference);
   const hostReview = detail.capabilities.review;
@@ -691,11 +724,11 @@ function PullRequestCodeTab({
     reply: hostReview.reply && detail.viewerPermissions.comment,
     resolve: hostReview.resolve && detail.viewerPermissions.resolve,
   };
-  const canCommentOnLines = review.inlineComment && commit === null;
+  const canCommentOnLines = review.inlineComment && wholeChange;
   const rangeComments = hostReview.rangeComment === true;
   // Agent context is local, so it does not require host comment permission.
   const canSelectLines =
-    commit === null && (review.inlineComment || onAddToAgentSelection !== undefined);
+    wholeChange && (review.inlineComment || onAddToAgentSelection !== undefined);
   const {
     parsedSlices,
     loadedFiles: pagedFiles,
@@ -811,8 +844,8 @@ function PullRequestCodeTab({
   // File membership does not guarantee a rendered hunk for the thread.
   const placedThreadIds = (() => {
     const placed = new Set<string>();
-    // Commit diffs use different line coordinates; list conversations separately.
-    if (commit !== null) return placed;
+    // Commit and round diffs use different line coordinates; list conversations separately.
+    if (!wholeChange) return placed;
     for (const file of files) {
       for (const thread of threadsByPath.get(resolveFileDiffPath(file)) ?? []) {
         if (thread.line !== null && isLineInFileDiff(file, thread.side, thread.line)) {
@@ -872,7 +905,7 @@ function PullRequestCodeTab({
       if (thread.line === null || !placedThreadIds.has(thread.id)) continue;
       groupAt(thread.side, thread.line).threads.push(thread);
     }
-    if (commit === null) {
+    if (wholeChange) {
       for (const comment of pendingComments) {
         if (comment.path !== path) continue;
         const anchor = getReviewPositionAnchor(comment.position);
@@ -1426,7 +1459,42 @@ function PullRequestCodeTab({
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        {orderedCommits.length > 0 ? (
+        {roundOption !== null ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button size="sm" variant="ghost" />}
+              className="min-w-0 max-w-64 shrink"
+              aria-label={gt("Round: {round}", { round: roundOption.label })}
+            >
+              <span className="truncate">{roundOption.label}</span>
+              <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuRadioGroup
+                value={roundOption.key}
+                onValueChange={(value) => onSelectedRoundChange?.(value)}
+              >
+                {(["round", "since"] as const).map((kind) => (
+                  <DropdownMenuGroup key={kind}>
+                    <DropdownMenuLabel>
+                      {kind === "round"
+                        ? gt("Rounds", { $context: "submissions of a pull request" })
+                        : gt("Compare", { $context: "heading, diffs between review rounds" })}
+                    </DropdownMenuLabel>
+                    {roundOptions
+                      .filter((option) => option.kind === kind)
+                      .map((option) => (
+                        <DropdownMenuRadioItem key={option.key} value={option.key} closeOnClick>
+                          {option.label}
+                        </DropdownMenuRadioItem>
+                      ))}
+                  </DropdownMenuGroup>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+        {orderedCommits.length > 0 && round === null ? (
           <DropdownMenu>
             <DropdownMenuTrigger
               render={<Button size="sm" variant="ghost" />}
@@ -1479,7 +1547,7 @@ function PullRequestCodeTab({
           </DropdownMenu>
         ) : null}
         <span className="flex shrink-0 items-center gap-x-2.5 whitespace-nowrap">
-          {filesViewed.enabled && files.length > 0 ? null : (
+          {filesViewedEnabled && files.length > 0 ? null : (
             <span className="shrink-0 tabular-nums">
               {gt("{count, plural, one {{count} file} other {{count} files}}", {
                 count: files.length,
@@ -1503,7 +1571,7 @@ function PullRequestCodeTab({
               </span>
             </Button>
           ) : null}
-          {filesViewed.enabled && files.length > 0 ? (
+          {filesViewedEnabled && files.length > 0 ? (
             <span className="flex shrink-0 items-center gap-1 tabular-nums">
               <span className="shrink-0">
                 {filePaths.filter(isFileViewed).length} / {files.length}
@@ -1581,7 +1649,7 @@ function PullRequestCodeTab({
               </TooltipPopup>
             </Tooltip>
           ) : null}
-          {commit !== null && review.inlineComment ? (
+          {!wholeChange && review.inlineComment ? (
             <Tooltip>
               <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
                 <MessageSquareOffIcon
@@ -1590,9 +1658,17 @@ function PullRequestCodeTab({
                 />
               </TooltipTrigger>
               <TooltipPopup side="bottom">
-                <T>
-                  A comment is anchored to the whole change, so switch to All commits to write one.
-                </T>
+                {commit === null ? (
+                  <T>
+                    A comment is anchored to the whole change, so switch to the latest round to
+                    write one.
+                  </T>
+                ) : (
+                  <T>
+                    A comment is anchored to the whole change, so switch to All commits to write
+                    one.
+                  </T>
+                )}
               </TooltipPopup>
             </Tooltip>
           ) : null}
@@ -1731,12 +1807,16 @@ function PullRequestCodeTab({
   if (items.length === 0 && nextCursor === null) {
     return withToolbar(
       <p className="px-4 py-5 text-body text-muted-foreground">
-        {commit === null
-          ? gt(
-              "This {term, select, mr {merge request} cr {change request} other {pull request}} has no file changes.",
-              { term },
-            )
-          : gt("This commit has no file changes.")}
+        {commit !== null
+          ? gt("This commit has no file changes.")
+          : round?.since !== undefined
+            ? gt("Nothing changed since round {number}.", { number: round.since })
+            : round !== null
+              ? gt("This round has no file changes.")
+              : gt(
+                  "This {term, select, mr {merge request} cr {change request} other {pull request}} has no file changes.",
+                  { term },
+                )}
       </p>,
     );
   }
