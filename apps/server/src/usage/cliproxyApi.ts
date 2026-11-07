@@ -46,6 +46,7 @@ const AuthFile = Schema.Struct({
   email: Schema.optional(Schema.String),
   disabled: Schema.optional(Schema.Boolean),
   project_id: Schema.optional(Schema.String),
+  status_message: Schema.optional(Schema.String),
   id_token: Schema.optional(
     Schema.Struct({
       chatgpt_account_id: Schema.optional(Schema.String),
@@ -497,9 +498,11 @@ export const makeCliproxyApi = Effect.gen(function* () {
             checkedAt,
             reason: "probeFailed",
             // Source-error details are already credential-free (status codes only).
-            message: isUsageLimitSourceError(error)
-              ? error.detail
-              : "The hub could not read this account's usage.",
+            message: /invalid.grant/i.test(account.status_message ?? "")
+              ? "The login expired. Sign in to this account again in CLIProxyAPI."
+              : isUsageLimitSourceError(error)
+                ? error.detail
+                : "The hub could not read this account's usage.",
           }),
         }),
       ),
