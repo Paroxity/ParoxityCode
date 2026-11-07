@@ -13,8 +13,6 @@ import {
   type ViewStyle,
 } from "react-native";
 
-import Animated, { FadeIn, useReducedMotion } from "react-native-reanimated";
-
 import { cn } from "../lib/cn";
 import { AppText as Text } from "./ui/AppText";
 import { SymbolView } from "./ui/AppSymbol";
@@ -23,7 +21,6 @@ import { useAndroidControlSizing } from "./ui/useAndroidControlSizing";
 const COMPOSER_TOOLBAR_GAP = 8;
 const COMPOSER_TOOLBAR_FADE_WIDTH = 18;
 const COMPOSER_TOOLBAR_SCROLL_EPSILON = 4;
-const INLINE_CONTROL_LABEL_ENTERING = FadeIn.duration(160);
 export function ComposerInlineControl(props: {
   readonly size?: "regular" | "large";
   readonly accessibilityHint?: string;
@@ -37,9 +34,6 @@ export function ComposerInlineControl(props: {
   readonly label: string;
   readonly labelEllipsizeMode?: ComponentProps<typeof Text>["ellipsizeMode"];
   readonly suffix?: ReactNode;
-  readonly suffixWidth?: number;
-  /** Show only the icon and chevron; the label still names the control for accessibility. */
-  readonly iconOnly?: boolean;
   readonly maxWidth?: ViewStyle["maxWidth"];
   readonly onPress?: () => void;
   readonly selected?: boolean;
@@ -48,17 +42,9 @@ export function ComposerInlineControl(props: {
   readonly showChevron?: boolean;
 }) {
   const { scale, smallIconSize } = useAndroidControlSizing();
-  const reducedMotion = useReducedMotion();
-  // Keep the picker anchored to its parent while the editor changes height.
-  const animatesLabel = props.iconOnly !== undefined;
   const iconSize = props.size === "large" ? 20 : smallIconSize;
   return (
-    <Animated.View
-      style={{
-        maxWidth: props.maxWidth ?? 190,
-        overflow: animatesLabel ? "hidden" : undefined,
-      }}
-    >
+    <View style={{ maxWidth: props.maxWidth ?? 190 }}>
       <Pressable
         accessibilityLabel={props.accessibilityLabel ?? props.label}
         accessibilityHint={props.accessibilityHint}
@@ -92,35 +78,21 @@ export function ComposerInlineControl(props: {
             type="monochrome"
           />
         ) : null}
-        {props.iconOnly ? null : (
-          <Animated.View
-            className="shrink"
-            entering={animatesLabel && !reducedMotion ? INLINE_CONTROL_LABEL_ENTERING : undefined}
-          >
-            <Text
-              className={cn(
-                props.size === "large" ? "text-base font-t3-medium" : "text-sm font-t3-medium",
-                props.tone === "warning"
-                  ? "text-warning-foreground"
-                  : props.emphasized || props.selected
-                    ? "text-foreground"
-                    : "text-foreground-muted",
-              )}
-              numberOfLines={1}
-              ellipsizeMode={props.labelEllipsizeMode}
-            >
-              {props.label}
-            </Text>
-          </Animated.View>
-        )}
-        {!props.iconOnly && props.suffix ? (
-          <View
-            className={cn("min-w-0", props.suffixWidth === undefined ? "shrink" : "shrink-0")}
-            style={{ width: props.suffixWidth }}
-          >
-            {props.suffix}
-          </View>
-        ) : null}
+        <Text
+          className={cn(
+            "shrink",
+            props.size === "large" ? "text-base font-t3-medium" : "text-sm font-t3-medium",
+            props.tone === "warning"
+              ? "text-warning-foreground"
+              : props.emphasized || props.selected
+                ? "text-foreground"
+                : "text-foreground-muted",
+          )}
+          numberOfLines={1}
+        >
+          {props.label}
+        </Text>
+        {props.suffix ? <View className="min-w-0 shrink">{props.suffix}</View> : null}
         {props.showChevron === false ? null : (
           <SymbolView
             name={props.chevronDirection === "right" ? "chevron.right" : "chevron.down"}
@@ -132,7 +104,7 @@ export function ComposerInlineControl(props: {
           />
         )}
       </Pressable>
-    </Animated.View>
+    </View>
   );
 }
 
