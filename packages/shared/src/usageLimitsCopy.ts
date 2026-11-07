@@ -10,6 +10,7 @@ import type { MFunctionType } from "gt-i18n/types";
 import {
   collectExternalUsageLinks as collectExternalUsageLinksWith,
   cursorUsageWindowDetails as cursorUsageWindowDetailsBase,
+  hubAccountName,
   type LimitPool,
   type LimitPresentations,
   projectRunOut,
@@ -106,6 +107,12 @@ export function collectLimitNotices(
             }),
           ),
         );
+      }
+      for (const account of source.accounts) {
+        if (account.usageLimits.unavailable?.reason === "unsupported") continue;
+        const notice = limitsNotice(account.usageLimits, resolve);
+        const name = `${source.label} · ${account.email ?? hubAccountName(account)}`;
+        if (notice) notices.add(`${label(environmentLabel, name)}: ${notice}`);
       }
     }
   }

@@ -346,7 +346,8 @@ function accountKeyResolver(reports: Iterable<AccountReport>) {
   };
 }
 
-const hubAccountName = (account: { readonly id: string }) => account.id.replace(/\.json$/i, "");
+export const hubAccountName = (account: { readonly id: string }) =>
+  account.id.replace(/\.json$/i, "");
 
 // Source ids are environment-local, so only a remote endpoint names the same hub across environments.
 function hubIdentity(environmentId: EnvironmentId, source: UsageLimitSourceSnapshot): string {
