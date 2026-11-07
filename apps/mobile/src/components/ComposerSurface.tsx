@@ -44,7 +44,12 @@ const EXPANDED_EDITOR_INSET = 14;
 // Room under the expanded editor for the toolbar row.
 const EXPANDED_EDITOR_BOTTOM = 52;
 
-export function useCompactComposerEditor(text: ScaledTextRole, value: string, animate: boolean) {
+export function useCompactComposerEditor(
+  text: ScaledTextRole,
+  value: string,
+  animate: boolean,
+  focused = false,
+) {
   const [contentSize, setContentSize] = useState({ width: 0, height: 0 });
   const [compactWidth, setCompactWidth] = useState(0);
   const contentHeight = contentSize.height;
@@ -61,9 +66,10 @@ export function useCompactComposerEditor(text: ScaledTextRole, value: string, an
   // A line that fits the expanded editor may still overflow its compact slot.
   // Compare its measured width too so widening cannot trigger a collapse loop.
   const isExpanded =
-    value.length > 0 &&
-    (contentHeight > text.lineHeight * 1.5 ||
-      (compactWidth > 0 && contentSize.width > compactWidth));
+    focused ||
+    (value.length > 0 &&
+      (contentHeight > text.lineHeight * 1.5 ||
+        (compactWidth > 0 && contentSize.width > compactWidth)));
   const compactRowHeight = Math.max(44, minimum);
   const compactBottom = (compactRowHeight - minimum) / 2;
   const isRTL = I18nManager.isRTL;
@@ -163,7 +169,7 @@ const composerHeightTransition: LayoutAnimationFunction = (values) => {
   };
 };
 const COMPOSER_LAYOUT_TRANSITION = Platform.OS === "android" ? undefined : composerHeightTransition;
-// Share of the one-row composer the draft keeps; a long model name truncates first.
+// Share of the one-row composer the draft keeps beside compact attachments.
 export const INLINE_EDITOR_MIN_WIDTH = "40%";
 const INLINE_EDITOR_HEIGHT = 36;
 
