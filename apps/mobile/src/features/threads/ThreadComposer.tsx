@@ -472,6 +472,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     bodyText,
     draftMessage,
     Platform.OS === "ios" && isFocused,
+    isExpanded,
   );
   const showsCompactDictation = isVoiceInputPresented;
   const isToolbarVisible = isVoiceInputPresented;
@@ -691,7 +692,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         reportedSelection={props.reportedModelSelection}
         prompt={draftMessage}
         surfaceColor={composerPanel}
-        iconOnly={!compactEditor.isExpanded}
         onPress={openSettings}
       />
     </View>
@@ -1017,17 +1017,18 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
               ) : null}
               <View
                 className="min-w-0 shrink flex-row items-center"
-                style={
-                  compactEditor.isExpanded ? { flex: 1, justifyContent: "flex-end" } : undefined
-                }
+                style={compactEditor.isExpanded ? { flex: 1 } : undefined}
               >
                 <Animated.View
                   key={compactEditor.isExpanded ? "expanded" : "compact"}
                   className="min-w-0 shrink flex-row items-center"
+                  style={compactEditor.isExpanded ? { flex: 1 } : undefined}
                   entering={compactEditor.toolbarControlsEntering}
                 >
                   {compactControl}
-                  {modelControl}
+                  {/* Collapsed, the row keeps only attach, mic and send. */}
+                  {compactEditor.isExpanded ? <View className="flex-1" /> : null}
+                  {compactEditor.isExpanded ? modelControl : null}
                 </Animated.View>
                 <ComposerDictationStartAction
                   size={usesLargeControls ? "large" : "regular"}
