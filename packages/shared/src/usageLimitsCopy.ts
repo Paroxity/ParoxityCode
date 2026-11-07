@@ -15,6 +15,7 @@ import {
   providersWithLimits,
   type ResetCreditChoice,
   resetCountdown,
+  hubAccountName,
 } from "./usageLimits.ts";
 
 const MINUTE = 60_000;
@@ -105,6 +106,12 @@ export function collectLimitNotices(
             }),
           ),
         );
+      }
+      for (const account of source.accounts) {
+        if (account.usageLimits.unavailable?.reason === "unsupported") continue;
+        const notice = limitsNotice(account.usageLimits, resolve);
+        const name = `${source.label} · ${account.email ?? hubAccountName(account)}`;
+        if (notice) notices.add(`${label(environmentLabel, name)}: ${notice}`);
       }
     }
   }
