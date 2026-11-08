@@ -1189,6 +1189,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const stayOnRouteThread = (threadKey: string) =>
     setDepartingThreadKey((current) => (current === threadKey ? null : current));
   const showProjectEnvironments = projectGroupsSpanEnvironments(projectGroups);
+  const machineLabelFor = (thread: Pick<SidebarThreadSummary, "environmentId">) =>
+    showProjectEnvironments ? (environmentLabelById.get(thread.environmentId) ?? null) : null;
   // Pinning from a row keeps rows in place while the menu is open.
   const projectScopeItems = useOrderWhileOpen(
     lookupProjectScopeItems,
@@ -3610,6 +3612,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           environmentMachine={
                             environmentMachineById.get(thread.environmentId) ?? "server"
                           }
+                          machineLabel={machineLabelFor(thread)}
                           project={
                             projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
                           }
