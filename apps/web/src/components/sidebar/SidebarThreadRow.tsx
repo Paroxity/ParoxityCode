@@ -24,10 +24,7 @@ import {
   resolveThreadActivityTimestamp,
 } from "@t3tools/client-runtime/state/thread-sort";
 import { type EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
-import {
-  formatWorkingDurationLabel,
-  resolveThreadProviderStack,
-} from "@t3tools/client-runtime/state/models";
+import { formatWorkingDurationLabel } from "@t3tools/client-runtime/state/models";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { toServerClock } from "@t3tools/client-runtime/clock";
 import {
@@ -111,7 +108,6 @@ import {
   ThreadPullRequestBadgeControl,
   ThreadPullRequestMiniListItem,
   ThreadPullRequestsMiniList,
-  ThreadWorktreeIndicator,
   prStatusIndicator,
   resolveThreadPullRequestBadge,
   terminalStatusFromRunningIds,
@@ -267,7 +263,10 @@ const SIDEBAR_STATUSES: Record<
   },
 };
 
-function SidebarWokeLabel(props: { onDismiss: (event: ReactMouseEvent) => void }) {
+function SidebarWokeLabel(props: {
+  onDismiss: (event: ReactMouseEvent) => void;
+  iconOnly?: boolean;
+}) {
   const gt = useGT();
   return (
     <Tooltip>
@@ -277,7 +276,7 @@ function SidebarWokeLabel(props: { onDismiss: (event: ReactMouseEvent) => void }
         }
       >
         <AlarmClockIcon aria-hidden className="size-4 shrink-0 text-warning-foreground" />
-        <span role="status" className="text-warning-foreground">
+        <span role="status" className={props.iconOnly ? "sr-only" : "text-warning-foreground"}>
           <T context="thread status: woke from snooze">Woke</T>
         </span>
       </TooltipTrigger>
@@ -304,62 +303,17 @@ function SidebarStatusLabel(props: {
         status.className,
       )}
     >
-      <status.Icon aria-hidden className={props.compact ? "size-3 shrink-0" : "size-4 shrink-0"} />
-      {props.label ?? messages(status.label)}
+      <status.Icon
+        aria-hidden
+        className={props.compact ? "size-3.5 shrink-0" : "size-4 shrink-0"}
+      />
+      <span className="sr-only">{props.label ?? messages(status.label)}</span>
       {!props.compact &&
       (props.kind === "working" || props.kind === "preparing" || props.kind === "waiting") ? (
         <span aria-hidden>
           <WorkingDuration environmentId={props.environmentId} startedAt={props.workingStartedAt} />
         </span>
       ) : null}
-    </span>
-  );
-}
-
-function SidebarProviderStack(props: {
-  thread: SidebarThreadSummary;
-  providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
-}) {
-  const stack = resolveThreadProviderStack(props.thread);
-  const currentInstanceId = stack[stack.length - 1]!;
-  const currentEntry = props.providerEntryByInstanceId.get(currentInstanceId) ?? null;
-  if (currentEntry === null) return null;
-  const showInstanceBadge = shouldShowInstanceBadge(
-    currentEntry,
-    props.providerEntryByInstanceId.values(),
-  );
-  const current = (
-    <ProviderInstanceIcon
-      driverKind={currentEntry.driverKind}
-      displayName={currentEntry.displayName}
-      accentColor={currentEntry.accentColor}
-      acpRegistryAgentId={currentEntry.acpRegistryAgentId}
-      acpRegistryIconUrl={currentEntry.acpRegistryIconUrl}
-      showBadge={showInstanceBadge}
-      size="compact"
-      iconClassName="size-3 opacity-60"
-    />
-  );
-  if (stack.length === 1) {
-    return <span className="inline-flex shrink-0 items-center">{current}</span>;
-  }
-  return (
-    <span className="inline-flex shrink-0 items-center gap-1.5">
-      {stack.slice(0, -1).map((instanceId) => {
-        const entry = props.providerEntryByInstanceId.get(instanceId);
-        if (entry === undefined) return null;
-        return (
-          <ProviderInstanceIcon
-            key={instanceId}
-            driverKind={entry.driverKind}
-            displayName={entry.displayName}
-            acpRegistryAgentId={entry.acpRegistryAgentId}
-            acpRegistryIconUrl={entry.acpRegistryIconUrl}
-            iconClassName="size-3 opacity-35 grayscale"
-          />
-        );
-      })}
-      <span className="relative z-10 inline-flex items-center">{current}</span>
     </span>
   );
 }
@@ -694,7 +648,7 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
 type SidebarThreadRowProps = {
   thread: SidebarThreadSummary;
   // "folder" is a one-line row inside a boring sidebar project folder;
-  // "folder-multiline" adds the card's branch and PR line under it.
+  // "folder-multiline" adds the card's machine and PR line under it.
   variant: "card" | "slim" | "folder" | "folder-multiline";
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
@@ -719,10 +673,10 @@ type SidebarThreadRowProps = {
   // Read at click time; a prop would re-render every row on entering or leaving a thread route.
   readOpensPullRequestsInRightPanel: () => boolean;
   jumpLabel: string | null;
-  currentEnvironmentId: string | null;
   environmentLabel: string | null;
   environmentMachine: EnvironmentMachineKind;
-  scratchMachineLabel: string | null;
+  // Set only when the sidebar spans more than one environment.
+  machineLabel: string | null;
   project: EnvironmentProject | null;
   projectDisplayName: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
@@ -947,9 +901,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const modelLabel = selectedModel
     ? getTriggerDisplayModelName(selectedModel, providerEntry?.driverKind)
     : formatModelSlugName(thread.modelSelection.model);
-
-  const isRemote = thread.environmentId !== props.currentEnvironmentId;
-  const showsScratchMachine = !checkoutThread.branch && props.scratchMachineLabel !== null;
 
   const detailsTooltip = (
     <SidebarThreadTooltip
@@ -1369,40 +1320,25 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     )
   ) : null;
 
-  const remoteMachineIcon =
-    isRemote && !showsScratchMachine ? (
-      <span className="inline-flex shrink-0 items-center text-dim-foreground">
-        <EnvironmentMachineIcon aria-hidden kind={props.environmentMachine} className="size-3.5" />
-      </span>
-    ) : null;
   const multiline = variant === "folder-multiline";
   const inFolder = variant === "folder" || multiline;
   const diff = latestRunDiff(thread);
-  // Only the trailing icons would remain, so the row moves them to the title line instead.
   const metaLineEmpty =
-    !checkoutThread.branch &&
-    !showsScratchMachine &&
+    props.machineLabel === null &&
     prBadge === null &&
     issueBadge === null &&
     diff === null &&
     runningTerminalIds.length === 0;
   const metaLine = metaLineEmpty ? null : (
     <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-meta font-normal">
-      {checkoutThread.branch ? (
-        <>
-          <ThreadWorktreeIndicator thread={checkoutThread} />
-          <span className="flex min-w-0 flex-1">
-            <MiddleTruncate value={checkoutThread.branch} showTitle={false} />
-          </span>
-        </>
-      ) : showsScratchMachine ? (
+      {props.machineLabel !== null ? (
         <>
           <EnvironmentMachineIcon
             aria-hidden
             kind={props.environmentMachine}
             className="size-3 shrink-0"
           />
-          <span className="min-w-0 flex-1 truncate">{props.scratchMachineLabel}</span>
+          <span className="min-w-0 flex-1 truncate">{props.machineLabel}</span>
         </>
       ) : (
         <span className="flex-1" />
@@ -1416,27 +1352,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
           <span className="text-diff-deletion-foreground">−{formatDiffCount(diff.deletions)}</span>
         </span>
       ) : null}
-      <span
-        aria-hidden
-        className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
-      >
-        {remoteMachineIcon}
-        <SidebarProviderStack
-          thread={thread}
-          providerEntryByInstanceId={props.providerEntryByInstanceId}
-        />
-      </span>
     </div>
   );
-  const titleLineIcons = metaLineEmpty ? (
-    <span aria-hidden className="inline-flex shrink-0 items-center gap-1">
-      {remoteMachineIcon}
-      <SidebarProviderStack
-        thread={thread}
-        providerEntryByInstanceId={props.providerEntryByInstanceId}
-      />
-    </span>
-  ) : null;
 
   if (variant !== "card") {
     return (
@@ -1496,7 +1413,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               )}
               {draftIndicator}
               {title}
-              {multiline ? titleLineIcons : null}
               {pinIndicator}
               {multiline ? null : terminalStatusIcon}
               {multiline ? null : issueBadge}
@@ -1654,8 +1570,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       // The hints are the rendered heights inside py-0.5. Revealing the open thread measures rows
       // that have not rendered yet, so a hint off by a pixel lands it a pixel short per row above.
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
-        metaLineEmpty && "[contain-intrinsic-size:auto_60px]",
+        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_54px]",
+        metaLineEmpty && "[contain-intrinsic-size:auto_36px]",
         sortable?.isDragging && "relative z-20",
       )}
     >
@@ -1684,7 +1600,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         >
           <div
             className={cn(
-              "relative z-10 h-[4.875rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)",
+              "relative z-10 h-[3.375rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)",
               metaLineEmpty && "h-auto",
             )}
           >
@@ -1693,18 +1609,13 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               {props.project ? (
                 <ProjectFavicon project={props.project} className="size-4 shrink-0" />
               ) : null}
-              {pinIndicator}
-              {props.projectDisplayName ? (
-                <span
-                  className={cn(
-                    "min-w-0 flex-1 truncate font-normal text-secondary-label text-meta",
-                  )}
-                >
-                  {props.projectDisplayName}
+              {title}
+              {isRegeneratingTitle ? (
+                <span role="status" className="sr-only">
+                  <T>Regenerating title</T>
                 </span>
-              ) : (
-                <span className="flex-1" />
-              )}
+              ) : null}
+              {pinIndicator}
               {sortable?.isDragging ? (
                 dragDestination
               ) : (
@@ -1727,7 +1638,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                     {topStatus === null ? (
                       <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
                     ) : isWokeStatus ? (
-                      <SidebarWokeLabel onDismiss={handleAcknowledgeWokeClick} />
+                      <SidebarWokeLabel iconOnly onDismiss={handleAcknowledgeWokeClick} />
                     ) : (
                       <SidebarStatusLabel
                         environmentId={thread.environmentId}
@@ -1808,15 +1719,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                 </span>
               )}
               {props.sweepAction !== null ? dragDestination : null}
-            </div>
-            <div className="mt-1 flex min-w-0 items-center gap-1.5">
-              {title}
-              {isRegeneratingTitle ? (
-                <span role="status" className="sr-only">
-                  <T>Regenerating title</T>
-                </span>
-              ) : null}
-              {titleLineIcons}
             </div>
             {metaLine}
           </div>
