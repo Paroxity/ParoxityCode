@@ -191,7 +191,8 @@ jobs:
       clerk_cli_oauth_client_id: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.prepare.outputs.relay_url }}
       label: Linux x64
-      runner: ubuntu-latest
+      # The build's glibc ceiling is Ubuntu 24.04's; ubuntu-latest now links native modules newer.
+      runner: ubuntu-24.04
       platform: linux
       target: AppImage
       arch: x64
