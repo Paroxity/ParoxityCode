@@ -10,6 +10,8 @@ This fork is an upstream T3 Code release plus Jujutsu (jj) support and a Tangled
 git log --oneline $(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*.*.1[0-9][0-9][0-9][0-9]' --exclude '*-preview.*' kaeden/stable)..kaeden/stable
 ```
 
+While upstream's redesign is unmerged, the base is the tip of its branch stack, `upstream/maria/redesign/6-workspace-panes`, which no tag names. Find the base with `git merge-base kaeden/stable upstream/maria/redesign/6-workspace-panes` and list the stack with `git log --oneline <base>..kaeden/stable`. Once upstream merges the redesign, rebase onto the first nightly that contains it and delete this paragraph.
+
 The stack has three parts:
 
 - **jj support.** It is a port of the community jj stack, upstream PRs #20749 to #20756, which upstream closed unmerged for lack of maintainer approval.
@@ -35,6 +37,11 @@ These trip up agents that follow upstream's habits:
 - **Base branch.** Open PRs against `kaeden/stable` on `kaedendev/t3code`. In T3 worktrees that repository is the `origin` remote; the rebase steps below call it `fork`. Never open PRs on `pingdotgg/t3code`.
 - **CI never finishes.** Most jobs run on Blacksmith runners, which the fork doesn't have, so they stay queued forever. "Agent context budget" fails because it measures against upstream `main`. Run `vp run check:changed origin/kaeden/stable` and the affected tests locally instead. Merge with `gh pr merge --squash --admin` and cancel the queued runs. Without the base argument, `check:changed` diffs against upstream and fails with `spawn E2BIG`.
 - **Upstream-only workflows.** The `Mobile EAS *` workflows and `release.yml` are gated on `pingdotgg/t3code` and never run here. EAS builds go to upstream's Expo project and Apple team, so don't use `eas build` or `eas submit` for the fork.
+- **Translations.** Upstream translates the UI, and lint rejects user-visible strings that aren't wrapped; see `docs/internals/i18n.md`.
+  - Wrap fork strings the way upstream does.
+  - Wording that differs in a jj repo is a second whole sentence, chosen with `terminology.kind === "jj"`. Leave the Git sentence exactly as upstream wrote it: its English text is the translation key.
+  - Fork-only strings have no translations, so other languages show them in English.
+  - After changing strings, run `vp run i18n:generate` in `apps/web`, `apps/mobile` and `apps/desktop`.
 - **Tools off `PATH`.** Agent shells may not load a login profile. `vp` lives in `~/.vite-plus/bin`. This Mac has no CocoaPods or Homebrew, so run anything that needs `pod`, such as `vp run mobile:install` after a native change, inside `nix shell nixpkgs#cocoapods -c …`.
 
 ## T3 Connect
@@ -45,6 +52,8 @@ Fork builds use upstream's production relay (`relay.t3.codes`) and Clerk app, so
 
 - A stale workspace is reported, not repaired. If you rewrite a thread's change from another workspace, T3 shows "workspace is stale". Run `jj workspace update-stale` in that workspace yourself.
 - Push rewrites a published bookmark only with newer versions of its own changes, after an amend, squash, describe or rebase under it; the button then reads "Push rewrite". It refuses when the remote holds anything else, such as someone else's commits or a change dropped from the stack, or when the remote moved since jj last fetched. To overwrite on purpose, run `jj git push` from a terminal.
+- An agent can't open a pull request through MCP in a jj repo; that tool reads Git state and reports a detached HEAD. The commit and push action in the app works.
+- A thread that an outside MCP caller starts in a jj repo uses the shared checkout, where a Git repo would get a new worktree.
 - T3's status refresh snapshots the working copy. If a refresh lands while a `jj commit` or `jj describe` runs, that command can fail with "Concurrent checkout". The result is a divergent change; files on disk stay intact.
 
 ## Version numbers
@@ -115,9 +124,9 @@ An agent can run these steps unattended. Every gate must pass before anything sh
 1. Find the target. The newest stable is `gh release view --repo pingdotgg/t3code --json tagName -q .tagName`. For a nightly, take the newest `v*-nightly.*` tag that contains the wanted commits (`git merge-base --is-ancestor <commit> <tag>`). Call it `NEW`.
 2. Find the current base: `OLD=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*.*.1[0-9][0-9][0-9][0-9]' --exclude '*-preview.*' fork/kaeden/stable)`. If `NEW` equals `OLD`, stop.
 3. Create a worktree next to the others. Base a branch `kaeden/stable-$NEW` on `fork/kaeden/stable`, then run `git rebase --onto $NEW $OLD`.
-4. Resolve each conflict so both upstream's change and the fork's intent survive. Never revert upstream work to make a hunk apply. Each commit must typecheck on its own.
+4. Resolve each conflict so both upstream's change and the fork's intent survive. Never revert upstream work to make a hunk apply. Each commit must typecheck on its own. When upstream moved code a fork commit edits, port the edit to where the code lives now.
 5. Find git calls that upstream added between `OLD` and `NEW` in `apps/server/src`, and route them by VCS kind. Record any you leave for later.
-6. Run the gates. All must pass:
+6. Regenerate the translation catalogs (see Translations above) and commit them. Then run the gates. All must pass:
    - `vp run check:changed $NEW`
    - `vp test run apps/server/src/jj apps/server/src/vcs apps/server/src/checkpointing apps/server/src/git apps/server/src/pullRequest packages/source-control-tangled infra/tangled-oauth scripts/fork-release-version.test.ts`
 7. Push `kaeden/stable-$NEW` to `fork`. Run a draft build from that branch with `--ref kaeden/stable-$NEW`.
