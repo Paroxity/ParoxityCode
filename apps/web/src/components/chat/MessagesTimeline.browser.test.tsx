@@ -262,7 +262,7 @@ describe("MessagesTimeline checkout terminology", () => {
     });
     await expect
       .element(screen.getByRole("region", { name: sectionLabel, exact: true }))
-      .toHaveTextContent(stageLabel);
+      .toMatchTextContent(stageLabel);
     expect(vcsState.lookup).toHaveBeenCalledWith(ENVIRONMENT_ID, "/checkout");
   });
 });
