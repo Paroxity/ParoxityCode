@@ -4,6 +4,9 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { useLayoutEffect, type ComponentProps, type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 
+// Unstyled, the context strip measures as overflowing on its first frame and re-renders the
+// toolbar to compact itself, which races the render counts below.
+import "~/index.css";
 import { act, render } from "../../test/render";
 
 const state = vi.hoisted(() => ({
@@ -86,10 +89,6 @@ vi.mock("../state/queries", () => ({
   },
 }));
 vi.mock("../localApi", () => ({ readLocalApi: () => undefined }));
-vi.mock("./BranchToolbarEnvironmentSelector", () => ({
-  BranchToolbarEnvironmentSelector: () => null,
-}));
-vi.mock("./BranchToolbarEnvModeSelector", () => ({ BranchToolbarEnvModeSelector: () => null }));
 vi.mock("./ui/toast", () => ({ stackedThreadToast: vi.fn(), toastManager: { add: vi.fn() } }));
 vi.mock("../state/session", () => ({
   environmentSession: { sessionStateAtom: () => null, preparedConnectionValueAtom: () => null },
@@ -98,6 +97,8 @@ vi.mock("../state/session", () => ({
 }));
 vi.mock("./AddProjectToMachineDialog", () => ({ openAddProjectToMachine: vi.fn() }));
 vi.mock("../hooks/useAddProjectTargets", () => ({ useAddProjectTargets: () => [] }));
+vi.mock("../state/environments", () => ({ useConnectedEnvironmentIds: () => [] }));
+vi.mock("../state/pullRequests", () => ({ pullRequestEnvironment: { list: vi.fn() } }));
 vi.mock("../state/threads", () => ({
   threadEnvironment: { stopSession: vi.fn(), updateMetadata: vi.fn() },
 }));
@@ -131,6 +132,7 @@ vi.mock("./chat/ThreadDetailsPrRows", () => ({
   ThreadDetailsPrRows: () => null,
   ThreadDetailsThreadPrRows: () => null,
 }));
+vi.mock("./chat/ThreadDetailsIssueRows", () => ({ ThreadDetailsIssueRows: () => null }));
 
 import { BranchToolbar } from "./BranchToolbar";
 import { WorktreeBaseBranchPicker } from "./WorktreeBaseBranchPicker";

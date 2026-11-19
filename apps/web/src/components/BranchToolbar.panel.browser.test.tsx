@@ -68,6 +68,9 @@ vi.mock(import("./BranchPicker"), async (original) => {
   };
 });
 vi.mock("../state/query", () => ({
+  formatEnvironmentQueryError: () => "The environment request failed.",
+  useEnvironmentQueryIsNewer: () => true,
+  useEnvironmentQueryRefresh: () => ({ refresh: state.refresh, isPending: () => false }),
   useEnvironmentQuery: (query: unknown) => ({
     data:
       query === null || query === "diff-preview" || query === "branch-commits"
@@ -328,7 +331,7 @@ it("refuses retained scope dispatch when an already-open Changes panel becomes u
     <DiffPanel composerDraftTarget={threadRef} workspaceMutationId={null} visible />,
   );
   await expect
-    .element(page.getByRole("button", { name: "Diff scope: Changes", exact: true }))
+    .element(page.getByRole("button", { name: "Diff scope: Branch changes", exact: true }))
     .toBeVisible();
   const selectScope = findScopeChange(state.diffHeader);
   if (!selectScope) throw new Error("Changes scope handler was not rendered.");
