@@ -27,6 +27,18 @@ export const BRAND_ASSET_PATHS = {
   nightlyWebIcon192Png: "assets/nightly/nightly-web-icon-192x192.png",
   nightlyWebIcon512Png: "assets/nightly/nightly-web-icon-512x512.png",
 
+  // Fork: the Paroxity black hole, kept apart from upstream's artwork so rebases never touch it.
+  paroxityIosIconPng: "assets/paroxity/paroxity-ios-1024.png",
+  paroxityMacIconPng: "assets/paroxity/paroxity-macos-1024.png",
+  paroxityLinuxIconPng: "assets/paroxity/paroxity-universal-1024.png",
+  paroxityWindowsIconIco: "assets/paroxity/paroxity-windows.ico",
+  paroxityWebFaviconIco: "assets/paroxity/paroxity-web-favicon.ico",
+  paroxityWebFavicon16Png: "assets/paroxity/paroxity-web-favicon-16x16.png",
+  paroxityWebFavicon32Png: "assets/paroxity/paroxity-web-favicon-32x32.png",
+  paroxityWebAppleTouchIconPng: "assets/paroxity/paroxity-web-apple-touch-180.png",
+  paroxityWebIcon192Png: "assets/paroxity/paroxity-web-icon-192x192.png",
+  paroxityWebIcon512Png: "assets/paroxity/paroxity-web-icon-512x512.png",
+
   developmentDesktopIconPng: "assets/dev/blueprint-macos-1024.png",
   developmentWindowsIconIco: "assets/dev/blueprint-windows.ico",
   developmentWebFaviconIco: "assets/dev/blueprint-web-favicon.ico",
@@ -37,15 +49,15 @@ export const BRAND_ASSET_PATHS = {
   developmentWebIcon512Png: "assets/dev/blueprint-web-icon-512x512.png",
 } as const;
 
-export type WebAssetBrand = "development" | "nightly" | "production";
+export type WebAssetBrand = "development" | "nightly" | "paroxity" | "production";
 
 export const WEB_ASSET_CHANNELS = ["latest", "nightly"] as const;
 
 export type WebAssetChannel = (typeof WEB_ASSET_CHANNELS)[number];
 
-// Fork: every channel, stable included, ships the nightly icons, which carry the fork's logo.
+// Fork: every channel, stable included, ships the Paroxity icons.
 export function resolveWebAssetBrandForChannel(_channel: WebAssetChannel): WebAssetBrand {
-  return "nightly";
+  return "paroxity";
 }
 
 export interface IconOverride {
@@ -78,6 +90,14 @@ const WEB_ICON_SOURCE_PATHS_BY_BRAND = {
     appleTouchIconPng: BRAND_ASSET_PATHS.nightlyWebAppleTouchIconPng,
     icon192Png: BRAND_ASSET_PATHS.nightlyWebIcon192Png,
     icon512Png: BRAND_ASSET_PATHS.nightlyWebIcon512Png,
+  },
+  paroxity: {
+    faviconIco: BRAND_ASSET_PATHS.paroxityWebFaviconIco,
+    favicon16Png: BRAND_ASSET_PATHS.paroxityWebFavicon16Png,
+    favicon32Png: BRAND_ASSET_PATHS.paroxityWebFavicon32Png,
+    appleTouchIconPng: BRAND_ASSET_PATHS.paroxityWebAppleTouchIconPng,
+    icon192Png: BRAND_ASSET_PATHS.paroxityWebIcon192Png,
+    icon512Png: BRAND_ASSET_PATHS.paroxityWebIcon512Png,
   },
   production: {
     faviconIco: BRAND_ASSET_PATHS.productionWebFaviconIco,

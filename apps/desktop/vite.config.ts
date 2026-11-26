@@ -26,10 +26,9 @@ const publicConfigDefine = {
   __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
     repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
   ),
-  __T3CODE_PRODUCT_NAME__: JSON.stringify(resolveProductName(repoEnv)),
 };
 
-// Fork: renames the app in release builds; only main carries GT's translations.
+// Fork: renames the app in release builds, APP_BASE_NAME included; only main carries GT's translations.
 const productName = resolveProductName(repoEnv);
 const renameMain = () => productNamePackPlugin(productName, { translated: true });
 const renameOther = () => productNamePackPlugin(productName, { translated: false });

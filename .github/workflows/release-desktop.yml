@@ -330,8 +330,8 @@ jobs:
         if: inputs.cli_archive
         shell: bash
         run: |
-          # Fork: every channel ships the nightly icons, which carry the fork's logo.
-          brand=nightly
+          # Fork: every channel ships the Paroxity icons.
+          brand=paroxity
           node scripts/apply-web-brand-assets.ts "$brand" apps/server/dist/client
 
       - name: Resolve target Node.js for the CLI executable
