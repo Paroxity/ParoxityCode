@@ -129,6 +129,8 @@ jobs:
 
       - name: Build JS bundle
         env:
+          # Renames the app in the UI at build time; see scripts/lib/product-name.ts.
+          T3CODE_PRODUCT_NAME: Paroxity Code
           T3CODE_TELEMETRY_CHANNEL: dev
           T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.prepare.outputs.clerk_publishable_key }}
           T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.prepare.outputs.clerk_jwt_template }}
@@ -374,10 +376,10 @@ jobs:
           fi
 
           cat > notes.md <<EOF
-          T3 Code with Jujutsu support, built on upstream [$BASE](https://github.com/pingdotgg/t3code/releases/tag/$BASE) from \`$REF\`.
+          Paroxity Code, an unofficial fork of T3 Code with Jujutsu support, built on upstream [$BASE](https://github.com/pingdotgg/t3code/releases/tag/$BASE) from \`$REF\`.
           EOF
           # Drafts are invisible to updaters, so assets upload before anything can be offered.
-          gh release create "$TAG" --draft --target "$REF" --title "T3 Code v$VERSION" --notes-file notes.md "${files[@]}"
+          gh release create "$TAG" --draft --target "$REF" --title "Paroxity Code v$VERSION" --notes-file notes.md "${files[@]}"
           if [[ "$PUBLISH" == "true" ]]; then
             gh release edit "$TAG" --draft=false --latest
             echo "Published $TAG as the latest release." >> "$GITHUB_STEP_SUMMARY"
