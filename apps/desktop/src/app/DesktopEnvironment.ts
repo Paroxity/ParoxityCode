@@ -86,7 +86,11 @@ export class DesktopEnvironment extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
-const APP_BASE_NAME = "T3 Code";
+declare const __T3CODE_PRODUCT_NAME__: string | undefined;
+
+// Fork: release builds rename the app with T3CODE_PRODUCT_NAME (scripts/lib/product-name.ts).
+const APP_BASE_NAME =
+  typeof __T3CODE_PRODUCT_NAME__ === "undefined" ? "T3 Code" : __T3CODE_PRODUCT_NAME__;
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
