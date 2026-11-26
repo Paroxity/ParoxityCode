@@ -37,6 +37,14 @@ These trip up agents that follow upstream's habits:
 - **Upstream-only workflows.** The `Mobile EAS *` workflows and `release.yml` are gated on `pingdotgg/t3code` and never run here. EAS builds go to upstream's Expo project and Apple team, so don't use `eas build` or `eas submit` for the fork.
 - **Tools off `PATH`.** Agent shells may not load a login profile. `vp` lives in `~/.vite-plus/bin`. This Mac has no CocoaPods or Homebrew, so run anything that needs `pod`, such as `vp run mobile:install` after a native change, inside `nix shell nixpkgs#cocoapods -c …`.
 
+## Product name
+
+Release builds call the app Paroxity Code. The source keeps upstream's "T3 Code", so rebases don't touch it; `fork-release.yml` sets `T3CODE_PRODUCT_NAME`, and dev builds and tests keep upstream's name.
+
+- **Web UI.** `scripts/lib/product-name.ts` rewrites the name while Vite bundles the source, the translation catalogs, `index.html` and the web manifest. GT finds each translation by a hash of the English source, so the plugin also makes GT's `hashSource` hash the upstream name; without that, every string naming the app would lose its translations. The build fails if that hook disappears after a GT upgrade.
+- **Desktop.** Only the displayed name changes: window title, app menu, About panel, and the name the desktop hands the web UI. `app.setName` stays `T3 Code <stage>`, because Electron's name can key the Keychain item that encrypts saved cookies and secrets.
+- **Not renamed yet:** the macOS app bundle and dock name (`T3 Code (Beta).app`), text the server writes (errors, CLI output, agent instructions), the desktop main process's own dialogs, and the iOS app.
+
 ## T3 Connect
 
 Fork builds use upstream's production relay (`relay.t3.codes`) and Clerk app, so a fork machine links to the same T3 Connect account as upstream machines. `fork-release.yml` holds the four public values upstream bakes into its builds. Upstream can rotate them; if linking breaks after an upstream release, read them from that release's `t3` binary (`buildTimeRelayUrl`, `buildTimeClerkPublishableKey`, `buildTimeClerkCliOAuthClientId`, and the `clerkJwtTemplate` in its client bundle). Builds made before this change have Connect turned off and need a reinstall. Relay tracing stays off in fork builds.
