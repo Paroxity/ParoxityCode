@@ -5,7 +5,7 @@ import { defaultInclude, defineConfig } from "vite-plus";
 import { Rolldown } from "vite-plus/pack";
 
 import { isDesktopRuntimeExternalDependency } from "../../scripts/lib/desktop-external-packages.ts";
-import { resolveProductName } from "../../scripts/lib/product-name.ts";
+import { productNamePackPlugin, resolveProductName } from "../../scripts/lib/product-name.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
 const repoEnv = loadRepoEnv();
@@ -28,6 +28,11 @@ const publicConfigDefine = {
   ),
   __T3CODE_PRODUCT_NAME__: JSON.stringify(resolveProductName(repoEnv)),
 };
+
+// Fork: renames the app in release builds; only main carries GT's translations.
+const productName = resolveProductName(repoEnv);
+const renameMain = () => productNamePackPlugin(productName, { translated: true });
+const renameOther = () => productNamePackPlugin(productName, { translated: false });
 
 const PAGE_WORLD_MODULE = /[\\/]src[\\/]preview[\\/]PageWorld\.ts$/;
 
@@ -99,6 +104,7 @@ export default defineConfig({
       define: publicConfigDefine,
       outputOptions: { codeSplitting: false },
       entry: ["src/main.ts"],
+      plugins: renameMain(),
       clean: true,
       deps: {
         alwaysBundle: (id) => !id.startsWith("node:") && !isMainProcessExternal(id),
@@ -121,6 +127,7 @@ export default defineConfig({
         "src/snapShot/RegionSnapShotWorker.ts",
         "src/snapShot/SnapShotAccessibilityWorker.ts",
       ],
+      plugins: renameOther(),
       clean: false,
       deps: {
         alwaysBundle: (id) => !id.startsWith("node:") && !isMainProcessExternal(id),
@@ -149,6 +156,7 @@ export default defineConfig({
       outExtensions: () => ({ js: ".cjs" }),
       define: publicConfigDefine,
       entry: ["src/preload.ts"],
+      plugins: renameOther(),
       deps: {
         // Sandboxed preloads cannot resolve imports inside ASAR; bundle Clerk's bridge.
         alwaysBundle: (id) => id === "@clerk/electron" || id.startsWith("@clerk/electron/"),

@@ -168,6 +168,7 @@ jobs:
       clerk_jwt_template: ${{ needs.prepare.outputs.clerk_jwt_template }}
       clerk_cli_oauth_client_id: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.prepare.outputs.relay_url }}
+      product_name: Paroxity Code
       label: macOS arm64
       runner: macos-latest
       platform: mac
@@ -192,6 +193,7 @@ jobs:
       clerk_jwt_template: ${{ needs.prepare.outputs.clerk_jwt_template }}
       clerk_cli_oauth_client_id: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.prepare.outputs.relay_url }}
+      product_name: Paroxity Code
       label: Linux x64
       # The build's glibc ceiling is Ubuntu 24.04's; ubuntu-latest now links native modules newer.
       runner: ubuntu-24.04
@@ -215,6 +217,7 @@ jobs:
       clerk_jwt_template: ${{ needs.prepare.outputs.clerk_jwt_template }}
       clerk_cli_oauth_client_id: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.prepare.outputs.relay_url }}
+      product_name: Paroxity Code
       label: Linux arm64
       runner: ubuntu-24.04-arm
       platform: linux
