@@ -43,8 +43,9 @@ export const WEB_ASSET_CHANNELS = ["latest", "nightly"] as const;
 
 export type WebAssetChannel = (typeof WEB_ASSET_CHANNELS)[number];
 
-export function resolveWebAssetBrandForChannel(channel: WebAssetChannel): WebAssetBrand {
-  return channel === "nightly" ? "nightly" : "production";
+// Fork: every channel, stable included, ships the nightly icons, which carry the fork's logo.
+export function resolveWebAssetBrandForChannel(_channel: WebAssetChannel): WebAssetBrand {
+  return "nightly";
 }
 
 export interface IconOverride {
