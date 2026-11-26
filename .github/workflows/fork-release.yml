@@ -138,6 +138,15 @@ jobs:
           T3CODE_RELAY_URL: ${{ needs.prepare.outputs.relay_url }}
         run: vp run build:desktop
 
+      # As in release.yml: upload-artifact skips hidden files, and release-desktop.yml restores this one.
+      - name: Stage web asset manifest
+        shell: bash
+        run: |
+          manifest=apps/server/dist/client/.vite/manifest.json
+          if [[ -f "$manifest" ]]; then
+            cp "$manifest" apps/server/dist/client/vite-manifest.release.json
+          fi
+
       # Same layout as release.yml's js-bundle, so release-desktop.yml packages it unchanged.
       - name: Upload JS bundle
         uses: actions/upload-artifact@v7
@@ -168,6 +177,7 @@ jobs:
       clerk_jwt_template: ${{ needs.prepare.outputs.clerk_jwt_template }}
       clerk_cli_oauth_client_id: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.prepare.outputs.relay_url }}
+      product_name: Paroxity Code
       label: macOS arm64
       runner: macos-latest
       platform: mac
@@ -192,6 +202,7 @@ jobs:
       clerk_jwt_template: ${{ needs.prepare.outputs.clerk_jwt_template }}
       clerk_cli_oauth_client_id: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.prepare.outputs.relay_url }}
+      product_name: Paroxity Code
       label: Linux x64
       # The build's glibc ceiling is Ubuntu 24.04's; ubuntu-latest now links native modules newer.
       runner: ubuntu-24.04
@@ -215,6 +226,7 @@ jobs:
       clerk_jwt_template: ${{ needs.prepare.outputs.clerk_jwt_template }}
       clerk_cli_oauth_client_id: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.prepare.outputs.relay_url }}
+      product_name: Paroxity Code
       label: Linux arm64
       runner: ubuntu-24.04-arm
       platform: linux

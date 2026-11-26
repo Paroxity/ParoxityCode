@@ -4,6 +4,7 @@ import * as NodePath from "node:path";
 import { defineConfig, mergeConfig } from "vite-plus";
 
 import baseConfig from "../../vite.config.ts";
+import { productNamePackPlugin, resolveProductName } from "../../scripts/lib/product-name.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 import { resolveTaggedSourceVersion } from "../../scripts/lib/tagged-source-version.ts";
 import rootPackageJson from "../../package.json" with { type: "json" };
@@ -98,6 +99,8 @@ export default mergeConfig(
     },
     pack: {
       plugins: [
+        // Fork: renames the app in release builds; see scripts/lib/product-name.ts.
+        ...productNamePackPlugin(resolveProductName(repoEnv), { translated: false }),
         {
           // Every server module reads its version from this manifest import.
           name: "t3code:build-version",

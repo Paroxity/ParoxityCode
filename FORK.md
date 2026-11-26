@@ -41,9 +41,11 @@ These trip up agents that follow upstream's habits:
 
 Release builds call the app Paroxity Code. The source keeps upstream's "T3 Code", so rebases don't touch it; `fork-release.yml` sets `T3CODE_PRODUCT_NAME`, and dev builds and tests keep upstream's name.
 
-- **Web UI.** `scripts/lib/product-name.ts` rewrites the name while Vite bundles the source, the translation catalogs, `index.html` and the web manifest. GT finds each translation by a hash of the English source, so the plugin also makes GT's `hashSource` hash the upstream name; without that, every string naming the app would lose its translations. The build fails if that hook disappears after a GT upgrade.
-- **Desktop.** Only the displayed name changes: window title, app menu, About panel, and the name the desktop hands the web UI. `app.setName` stays `T3 Code <stage>`, because Electron's name can key the Keychain item that encrypts saved cookies and secrets.
-- **Not renamed yet:** the macOS app bundle and dock name (`T3 Code (Beta).app`), text the server writes (errors, CLI output, agent instructions), the desktop main process's own dialogs, and the iOS app.
+- **Text.** `scripts/lib/product-name.ts` rewrites the name while the web, desktop main and server bundles are built, translation catalogs included. GT finds each translation by a hash of the English source, so the plugin also makes GT's `hashSource` hash the upstream name; without that, every string naming the app would lose its translations. The web and desktop main builds fail if that hook disappears after a GT upgrade.
+- **What keeps "T3 Code".** `KEEP_UPSTREAM_NAME` in the same file lists the strings that must not change: markers that earlier builds wrote to disk, legacy profile names, the Electron app name that keys the Keychain item for saved cookies and secrets, and names other services know (Codex's originator, the peer-link prefix, upstream's GitHub app and Tangled client, the commit author on stacked PRs). The build fails if one of them moves, so check the new spot after a rebase.
+- **Logo.** `T3Wordmark` draws a black hole instead of "T3" when `VITE_FORK_PRODUCT_NAME` is set, and the sidebar and standalone pages show "Paroxity" as text. The web icons, splash included, are the `assets/nightly` set, which every channel uses.
+- **App bundle.** Packaging names the bundle `Paroxity Code (Beta).app`, which is what the Dock and menu bar show. Electron's app name comes from the staged `package.json` and `app.setName`, never the bundle, so saved secrets survive the rename. An auto-update keeps the old file name in `/Applications`, so an updated Mac keeps "T3 Code (Beta)" in the Dock until the app is reinstalled from the DMG or renamed.
+- **Not renamed:** the release asset file names, the `t3` command, the Linux desktop files and GNOME extension, and the iOS app.
 
 ## T3 Connect
 

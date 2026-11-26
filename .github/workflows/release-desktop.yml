@@ -76,6 +76,12 @@ on:
         required: false
         default: false
         type: boolean
+      # Fork: the app's name in release builds, such as "Paroxity Code"; empty keeps upstream's.
+      # It names the app bundle, which macOS shows in the Dock and menu bar.
+      product_name:
+        required: false
+        default: ""
+        type: string
       # Whether the JS bundle came from a pull request. This job holds the
       # signing secrets, so packaging then skips every step that runs the bundle.
       untrusted_bundle:
@@ -145,6 +151,8 @@ jobs:
       T3CODE_CLERK_JWT_TEMPLATE: ${{ inputs.clerk_jwt_template }}
       T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ inputs.clerk_cli_oauth_client_id }}
       T3CODE_RELAY_URL: ${{ inputs.relay_url }}
+      # Fork: the CLI archive rebuilds the server, and packaging names the app bundle.
+      T3CODE_PRODUCT_NAME: ${{ inputs.product_name }}
     steps:
       # The launch check and the CLI archive smoke test both run the bundle.
       - name: Reject running an untrusted bundle
@@ -331,8 +339,8 @@ jobs:
         if: inputs.cli_archive
         shell: bash
         run: |
-          brand=production
-          if [[ "${{ inputs.version }}" =~ -nightly\.[0-9]{8}\.[0-9]+$ ]]; then brand=nightly; fi
+          # Fork: every channel ships the nightly icons, which carry the fork's logo.
+          brand=nightly
           node scripts/apply-web-brand-assets.ts "$brand" apps/server/dist/client
 
       - name: Resolve target Node.js for the CLI executable

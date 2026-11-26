@@ -40,6 +40,7 @@ import {
   findInlinedExternalPackages,
   selectCliRuntimeExternalDependencies,
 } from "./lib/cli-external-packages.ts";
+import { resolveProductName, UPSTREAM_PRODUCT_NAME } from "./lib/product-name.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { selectDesktopRuntimeExternalDependencies } from "./lib/desktop-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
@@ -2588,6 +2589,12 @@ export const stageDesktopDmgBackground = Effect.fn("stageDesktopDmgBackground")(
   if (!(yield* fs.exists(sourcePath))) {
     return yield* new DesktopDmgBackgroundSourceMissingError({ channel, sourcePath });
   }
+  // Fork: the staged copy's "Drag T3 Code into Applications." names the renamed app.
+  const productName = resolveProductName(process.env);
+  if (productName !== UPSTREAM_PRODUCT_NAME) {
+    const svg = yield* fs.readFileString(sourcePath);
+    yield* fs.writeFileString(sourcePath, svg.replaceAll(UPSTREAM_PRODUCT_NAME, productName));
+  }
 
   for (const output of [
     { suffix: "", width: 640, height: 432 },
@@ -2803,10 +2810,14 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
   return `${trimmed.slice(0, versionSeparator)}/${trimmed.slice(versionSeparator + 1)}`;
 }
 
+// Fork: T3CODE_PRODUCT_NAME renames the bundle. Electron takes its app name, and so the Keychain
+// item, from the staged package.json and app.setName, never from the bundle.
 export function resolveDesktopProductName(version: string): string {
-  return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "T3 Code (Nightly)"
-    : (desktopPackageJson.productName ?? "T3 Code");
+  const upstreamName =
+    resolveDesktopUpdateChannel(version) === "nightly"
+      ? "T3 Code (Nightly)"
+      : (desktopPackageJson.productName ?? "T3 Code");
+  return upstreamName.replaceAll(UPSTREAM_PRODUCT_NAME, resolveProductName(process.env));
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
