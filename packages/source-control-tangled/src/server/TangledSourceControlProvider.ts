@@ -2,7 +2,6 @@ import {
   SourceControlProviderError,
   SourceControlProviderKind,
   type ChangeRequest,
-  type ChangeRequestState,
 } from "@t3tools/contracts";
 import {
   providerAuth,
@@ -14,6 +13,7 @@ import { readSourceControlHostSettings } from "@t3tools/source-control-core/shar
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FiberSet from "effect/FiberSet";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
@@ -28,7 +28,7 @@ import {
   type TangledRepositoryRef,
 } from "../shared/definition.ts";
 import * as TangledApi from "./TangledApi.ts";
-import { TangledAuth, type TangledAuthError } from "./TangledAuth.ts";
+import { TangledAuth } from "./TangledAuth.ts";
 import * as TangledRound from "./tangledRound.ts";
 
 const KIND = SourceControlProviderKind.make("tangled");
@@ -41,8 +41,8 @@ const DEFAULT_KNOT = "knot1.tangled.sh";
 const KNOT_HOST =
   /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+(?::\d{1,5})?$/u;
 const REPOSITORY_NAME = /^(?!\.)[A-Za-z0-9._-]{1,100}(?<!\.)$/u;
-
-type ApiError = TangledApi.TangledApiError | TangledAuthError;
+/** Waiting for the mirror, then for the index to list the round, stays under this. */
+const PUSH_FOLLOW_LIMIT = Duration.seconds(45);
 
 /**
  * Where git reaches a repository. Tangled's web host relays its own knots; a self-hosted knot is
@@ -60,22 +60,7 @@ export function repositoryGitUrls(
       };
 }
 
-const changeRequestState = (state: TangledApi.TicketState): ChangeRequestState =>
-  state === "completed" ? "merged" : state;
-
-const ticketState = (state: ChangeRequestState): TangledApi.TicketState =>
-  state === "merged" ? "completed" : state;
-
-/** Pull request numbers are ticket keys, which the knot mints as integers; any other key is skipped. */
-export const ticketNumber = (rkey: string): number | null => {
-  const number = /^[1-9]\d*$/u.test(rkey) ? Number(rkey) : Number.NaN;
-  return Number.isSafeInteger(number) ? number : null;
-};
-
 const latest = <A>(items: ReadonlyArray<A>) => items.at(-1);
-
-export const pullRequestUrl = (repository: TangledApi.TangledRepository, number: number) =>
-  `${TangledApi.webUrl(repository)}/pulls/${number}`;
 
 const toUtc = (...candidates: ReadonlyArray<string | null | undefined>) =>
   Option.fromNullishOr(
@@ -113,11 +98,13 @@ export const makeDiscovery = Effect.gen(function* () {
   } satisfies SourceControlApiDiscoverySpec;
 });
 
-export const make = Effect.gen(function* () {
+/** The provider, and a wait for the rounds pushes left submitting in the background. */
+export const makeWithPushFollowers = Effect.gen(function* () {
   const api = yield* TangledApi.TangledApi;
   const auth = yield* TangledAuth;
   const host = yield* SourceControlHost.SourceControlHost;
   const fileSystem = yield* FileSystem.FileSystem;
+  const pushFollowers = yield* FiberSet.make();
 
   const error = (operation: string, cwd: string, detail: string, cause?: unknown) =>
     new SourceControlProviderError({
@@ -127,7 +114,7 @@ export const make = Effect.gen(function* () {
       detail,
       ...(cause === undefined ? {} : { cause }),
     });
-  const fromApi = (operation: string, cwd: string) => (cause: ApiError) =>
+  const fromApi = (operation: string, cwd: string) => (cause: TangledApi.TangledError) =>
     error(
       operation,
       cwd,
@@ -172,7 +159,7 @@ export const make = Effect.gen(function* () {
     ticket: TangledApi.TangledTicket,
     rounds: ReadonlyArray<TangledApi.TangledRound>,
   ) {
-    const number = ticketNumber(ticket.rkey);
+    const number = TangledApi.ticketNumber(ticket.rkey);
     const round = latest(rounds);
     if (number === null || round === undefined || ticket.targetBranch.length === 0) return null;
     const crossRepository = round.sourceRepoDid !== target.repoDid;
@@ -185,11 +172,11 @@ export const make = Effect.gen(function* () {
       provider: KIND,
       number,
       title: ticket.title.trim() || `Pull request ${number}`,
-      url: pullRequestUrl(target, number),
+      url: TangledApi.pullRequestUrl(target, number),
       baseRefName: ticket.targetBranch,
       headRefName: round.sourceBranch ?? round.headOid,
       headSha: round.headOid,
-      state: changeRequestState(ticket.state),
+      state: TangledApi.pullState(ticket.state),
       closedAt: ticket.state === "closed" ? ticket.stateUpdatedAt : null,
       mergedAt: ticket.state === "completed" ? ticket.stateUpdatedAt : null,
       updatedAt: toUtc(ticket.stateUpdatedAt, round.createdAt, ticket.createdAt),
@@ -269,7 +256,9 @@ export const make = Effect.gen(function* () {
       const limit = input.limit ?? 20;
       const viewer = Option.getOrNull(yield* auth.viewer);
       const states: ReadonlyArray<TangledApi.TicketState> =
-        input.state === "all" ? ["open", "completed", "closed"] : [ticketState(input.state)];
+        input.state === "all"
+          ? ["open", "completed", "closed"]
+          : [TangledApi.ticketStateOf(input.state)];
       const found: Array<ChangeRequest> = [];
       for (const state of states) {
         let cursor: string | null = null;
@@ -282,7 +271,7 @@ export const make = Effect.gen(function* () {
           // Bobbin ignores its author filter, so narrowing to the viewer's own happens here.
           const candidates = page.items.filter(
             (ticket) =>
-              ticketNumber(ticket.rkey) !== null &&
+              TangledApi.ticketNumber(ticket.rkey) !== null &&
               ticket.targetBranch.length > 0 &&
               (viewer === null || ticket.authorDid === viewer.did),
           );
@@ -312,59 +301,80 @@ export const make = Effect.gen(function* () {
       return found;
     });
 
+  /** Waits for Tangled's mirror to see the push, then submits it as the pull request's next round. */
+  const followPush = Effect.fn("TangledSourceControlProvider.followPush")(function* (
+    input: { readonly cwd: string; readonly branch: string; readonly headSha: string },
+    target: TangledApi.TangledRepository,
+    pull: ChangeRequest,
+  ) {
+    const source = {
+      target,
+      targetBranch: pull.baseRefName,
+      sourceRepoDid: target.repoDid,
+      sourceBranch: input.branch,
+    };
+    yield* TangledRound.awaitMirroredHead(api, {
+      repoDid: target.repoDid,
+      branch: input.branch,
+      head: input.headSha,
+    });
+    const round = yield* TangledRound.proposeRound(api, source);
+    yield* TangledRound.submitRound(api, {
+      ...source,
+      ...round,
+      ticketUri: TangledApi.ticketUri(target.repoDid, String(pull.number)),
+    });
+  });
+
   /**
-   * Tangled never makes a round from a push, so a push T3 makes to the branch of the viewer's open
-   * pull request submits the new head as its next round, as the web's Resubmit would.
+   * Tangled makes no round from a push, so a push to the viewer's open pull request's branch is
+   * submitted as its next round once the mirror has it, after the push returns; a failure is
+   * logged and Resubmit offers it again. A fork's pull request lives upstream, which the fork's
+   * remote does not name, so only the pushed repository's own pull requests are followed.
    */
+  const followPushedBranch = Effect.fn("TangledSourceControlProvider.followPushedBranch")(
+    function* (input: { readonly cwd: string; readonly branch: string; readonly headSha: string }) {
+      const operation = "branchPushed";
+      const stale = (yield* listChangeRequests({
+        cwd: input.cwd,
+        headSelector: input.branch,
+        state: "open",
+      })).filter((pull) => !pull.isCrossRepository && pull.headSha !== input.headSha);
+      if (stale.length === 0) return;
+      const target = yield* resolveTarget(operation, input);
+      yield* Effect.forEach(
+        stale,
+        (pull) =>
+          followPush(input, target, pull).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Tangled did not take the pushed branch as a new round.", {
+                branch: input.branch,
+                number: pull.number,
+                detail: cause.detail,
+              }),
+            ),
+          ),
+        { discard: true },
+      );
+    },
+  );
+
   const branchPushed: NonNullable<
     SourceControlProvider.SourceControlProvider["Service"]["branchPushed"]
   > = Effect.fn("TangledSourceControlProvider.branchPushed")(function* (input) {
-    const operation = "branchPushed";
-    // The push already stands, so the note says what was not done before why.
-    const notResubmitted = (number: number | null) => (cause: SourceControlProviderError) =>
-      error(
-        operation,
-        input.cwd,
-        `${number === null ? "The pull request" : `Pull request #${number}`} was not resubmitted. ${cause.detail}`,
-        cause,
-      );
     if (Option.isNone(yield* auth.viewer)) return;
-    const stale = (yield* listChangeRequests({
-      cwd: input.cwd,
-      headSelector: input.branch,
-      state: "open",
-    }).pipe(Effect.mapError(notResubmitted(null)))).filter(
-      (pull) => !pull.isCrossRepository && pull.headSha !== input.headSha,
-    );
-    if (stale.length === 0) return;
-    const target = yield* resolveTarget(operation, input).pipe(
-      Effect.mapError(notResubmitted(null)),
-    );
-    for (const pull of stale) {
-      const source = {
-        target,
-        targetBranch: pull.baseRefName,
-        sourceRepoDid: target.repoDid,
-        sourceBranch: input.branch,
-      };
-      yield* TangledRound.awaitMirroredHead(api, {
-        repoDid: target.repoDid,
-        branch: input.branch,
-        head: input.headSha,
-      }).pipe(
-        Effect.andThen(TangledRound.proposeRound(api, source)),
-        Effect.flatMap((round) =>
-          TangledRound.submitRound(api, {
-            ...source,
-            ...round,
-            ticketUri: TangledApi.ticketUri(target.repoDid, String(pull.number)),
+    yield* FiberSet.run(
+      pushFollowers,
+      followPushedBranch(input).pipe(
+        Effect.timeoutOption(PUSH_FOLLOW_LIMIT),
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not find the pull requests a push should update.", {
+            branch: input.branch,
+            detail: cause.detail,
           }),
         ),
-        Effect.mapError((cause) =>
-          notResubmitted(pull.number)(fromApi(operation, input.cwd)(cause)),
-        ),
-      );
-    }
+      ),
+    );
   });
 
   /**
@@ -461,7 +471,7 @@ export const make = Effect.gen(function* () {
       };
     });
 
-  return SourceControlProvider.SourceControlProvider.of({
+  const provider = SourceControlProvider.SourceControlProvider.of({
     kind: KIND,
     refineRepositoryIdentity,
     getChangeRequest: Effect.fn("TangledSourceControlProvider.getChangeRequest")((input) =>
@@ -524,7 +534,7 @@ export const make = Effect.gen(function* () {
             input.cwd,
             "Tangled accepted the pull request without naming it.",
           );
-        const rkey = ticket.uri.slice(ticket.uri.lastIndexOf("/") + 1);
+        const rkey = TangledApi.rkeyOf(ticket.uri);
         yield* TangledRound.submitRound(api, {
           ...roundSource,
           ...round,
@@ -632,4 +642,7 @@ export const make = Effect.gen(function* () {
       },
     ),
   });
+  return { provider, awaitPushFollowers: FiberSet.awaitEmpty(pushFollowers) };
 });
+
+export const make = makeWithPushFollowers.pipe(Effect.map(({ provider }) => provider));

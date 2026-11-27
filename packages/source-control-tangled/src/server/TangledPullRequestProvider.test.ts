@@ -131,6 +131,16 @@ describe("TangledPullRequestProvider detail", () => {
       assert.strictEqual((yield* read).updatedAt, "2026-11-02T10:00:00.000Z");
       comments = [comment("2026-11-03T08:00:00Z")];
       assert.strictEqual((yield* read).updatedAt, "2026-11-03T08:00:00.000Z");
+      assert.deepStrictEqual(
+        fake.calls("org.tangled.feed.listComments").map((call) => call.params.get("limit")),
+        ["1", "1"],
+        "Tangled lists the newest comment first, so one is read",
+      );
+      assert.strictEqual(
+        fake.calls("org.tangled.track.getTicketView").length,
+        1,
+        "the reads of one pull request share its ticket",
+      );
     }).pipe(Effect.provide(fake.layer));
   });
 });
@@ -415,8 +425,8 @@ describe("TangledPullRequestProvider rounds", () => {
         [
           [FORK, FORK],
           [FORK, FORK],
-          [FORK, FORK],
         ],
+        "the file's contents reuse the slice's interdiff",
       );
       // The rebased left side exists only inline, so no blob is read for it.
       assert.deepStrictEqual(

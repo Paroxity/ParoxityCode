@@ -1,3 +1,4 @@
+import type { ChangeRequestState } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -16,6 +17,7 @@ import {
   tangledRepositoryKey,
   type TangledRepositoryRef,
 } from "../shared/definition.ts";
+import { PublicHostGuard } from "./publicHost.ts";
 import { TangledAuth, type TangledAuthError } from "./TangledAuth.ts";
 
 /**
@@ -57,13 +59,22 @@ export const COLLECTION = {
   declaration: "org.tangled.repo.declaration",
 } as const;
 
-const BOBBIN = "https://api.tangled.org";
+/** Tangled's index, which also resolves identities. */
+export const BOBBIN = "https://api.tangled.org";
+const BOBBIN_HOST = new URL(BOBBIN).host;
 const TIMEOUT = Duration.seconds(30);
 const NO_REDIRECT: RequestInit = { redirect: "manual" };
 const IDENTITY_TTL = Duration.minutes(30);
 const REPOSITORY_TTL = Duration.minutes(10);
 const ROUNDS_TTL = Duration.minutes(1);
+// Opening a pull request reads its ticket for the detail, checks, activity and permissions.
+const TICKET_TTL = Duration.seconds(10);
+// Paging a diff, or expanding a file's context, rereads the same comparison.
+const DIFF_TTL = Duration.minutes(1);
+const DIFF_CAPACITY = 32;
 const CACHE_CAPACITY = 2_000;
+const PAGE_SIZE = 100;
+const MAX_LISTED = 1_000;
 const MAX_BLOB_BYTES = 1024 * 1024;
 
 export class TangledApiError extends Schema.TaggedError<TangledApiError>()("TangledApiError", {
@@ -80,8 +91,10 @@ export class TangledApiError extends Schema.TaggedError<TangledApiError>()("Tang
   }
 }
 
+export type TangledError = TangledApiError | TangledAuthError;
+
 /** A 4xx other than a timeout or a throttle: the host refused, so nothing was written. */
-export const isDefiniteRejection = (error: TangledApiError | TangledAuthError) =>
+export const isDefiniteRejection = (error: TangledError) =>
   error._tag === "TangledApiError" &&
   error.status !== null &&
   error.status >= 400 &&
@@ -91,6 +104,7 @@ export const isDefiniteRejection = (error: TangledApiError | TangledAuthError) =
 
 const Markdown = Schema.Struct({ text: Schema.String });
 const StrongRef = Schema.Struct({ uri: Schema.String, cid: Schema.String });
+const Cursor = Schema.optional(Schema.NullOr(Schema.String));
 
 const Manifest = Schema.Struct({
   uri: Schema.String,
@@ -102,12 +116,16 @@ const Manifest = Schema.Struct({
   }),
 });
 
-const Identity = Schema.Struct({ did: Schema.String, handle: Schema.String });
+export const MiniDoc = Schema.Struct({
+  did: Schema.String,
+  handle: Schema.String,
+  pds: Schema.optional(Schema.String),
+});
 
-const Ticket = Schema.Struct({
+/** A ticket's own fields, which the listing nests under `value` and the view inlines. */
+const TicketFields = Schema.Struct({
   title: Markdown,
   body: Schema.optional(Schema.NullOr(Markdown)),
-  state: Schema.String,
   targetBranch: Schema.optional(Schema.NullOr(Schema.String)),
   createdAt: Schema.String,
 });
@@ -119,24 +137,15 @@ const TicketItem = Schema.Struct({
   state: Schema.String,
   stateUpdatedAt: Schema.optional(Schema.NullOr(Schema.String)),
   commentCount: Schema.optional(Schema.Number),
-  value: Ticket,
-});
-
-const TicketPage = Schema.Struct({
-  items: Schema.Array(Schema.Unknown),
-  cursor: Schema.optional(Schema.NullOr(Schema.String)),
-  total: Schema.optional(Schema.Number),
+  value: TicketFields,
 });
 
 const TicketView = Schema.Struct({
+  ...TicketFields.fields,
   uri: Schema.String,
   cid: Schema.String,
-  author: Identity,
-  title: Markdown,
-  body: Schema.optional(Schema.NullOr(Markdown)),
+  author: MiniDoc,
   state: Schema.String,
-  targetBranch: Schema.optional(Schema.NullOr(Schema.String)),
-  createdAt: Schema.String,
 });
 
 const Patch = Schema.Struct({
@@ -156,10 +165,6 @@ const Patch = Schema.Struct({
     createdAt: Schema.String,
   }),
 });
-const PatchPage = Schema.Struct({
-  items: Schema.Array(Patch),
-  cursor: Schema.optional(Schema.NullOr(Schema.String)),
-});
 
 const Comment = Schema.Struct({
   uri: Schema.String,
@@ -168,10 +173,6 @@ const Comment = Schema.Struct({
   body: Schema.optional(Schema.NullOr(Markdown)),
   createdAt: Schema.String,
   replyTo: Schema.optional(Schema.NullOr(StrongRef)),
-});
-const CommentPage = Schema.Struct({
-  items: Schema.Array(Comment),
-  cursor: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const Collaborators = Schema.Struct({
@@ -270,7 +271,25 @@ export const repositoryKey = (repository: TangledRepository) =>
 export const webUrl = (repository: TangledRepository) =>
   `https://${TANGLED_WEB_HOST}/${repositoryPath(repository)}`;
 
+export const pullRequestUrl = (repository: TangledRepository, number: number) =>
+  `${webUrl(repository)}/pulls/${number}`;
+
 export type TicketState = "open" | "closed" | "completed";
+
+export const pullState = (state: TicketState): ChangeRequestState =>
+  state === "completed" ? "merged" : state;
+
+export const ticketStateOf = (state: ChangeRequestState): TicketState =>
+  state === "merged" ? "completed" : state;
+
+/** The last segment of an `at://` URI: its record key. */
+export const rkeyOf = (uri: string) => uri.slice(uri.lastIndexOf("/") + 1);
+
+/** Pull request numbers are ticket keys, which the knot mints as integers; any other key is skipped. */
+export const ticketNumber = (rkey: string): number | null => {
+  const number = /^[1-9]\d*$/u.test(rkey) ? Number(rkey) : Number.NaN;
+  return Number.isSafeInteger(number) ? number : null;
+};
 
 export interface TangledTicket {
   readonly uri: string;
@@ -318,14 +337,14 @@ export interface TangledPage<A> {
   readonly cursor: string | null;
 }
 
+type RoundRange = Pick<TangledRound, "baseOid" | "headOid" | "sourceRepoDid">;
+
 const ticketState = (state: string): TicketState =>
   state === "closed"
     ? "closed"
     : state === "completed" || state === "merged"
       ? "completed"
       : "open";
-
-const rkeyOf = (uri: string) => uri.slice(uri.lastIndexOf("/") + 1);
 
 /** `did:web:<host>`, with a port written `%3A`, as knots and spindles name themselves. */
 const serviceDid = (host: string) => `did:web:${host.replaceAll(":", "%3A")}`;
@@ -337,13 +356,26 @@ const hostOfServiceDid = (did: string) =>
 export const ticketUri = (repoDid: string, rkey: string) =>
   `at://${repoDid}/${COLLECTION.ticket}/${rkey}`;
 
-export interface TangledWrite {
-  /** The knot, or bobbin for a merge, that takes the call. */
-  readonly service: "knot" | "bobbin";
-  readonly repository: TangledRepository;
-  readonly nsid: string;
-  readonly body: Record<string, unknown>;
-}
+const repoDidOfUri = (uri: string) => uri.replace(/^at:\/\//u, "").split("/")[0] ?? "";
+
+/**
+ * A procedure authorized by a service-auth token minted for exactly this call: a record write,
+ * patch or repository removal on the repository's knot, or a merge through bobbin.
+ */
+export type TangledWrite =
+  | {
+      readonly service: "knot" | "bobbin";
+      readonly repository: TangledRepository;
+      readonly nsid: string;
+      readonly body: Record<string, unknown>;
+    }
+  | {
+      /** A knot's own procedure, as `createRepo`, authorized for the knot rather than a repository. */
+      readonly service: "knot-host";
+      readonly knot: string;
+      readonly nsid: string;
+      readonly body: Record<string, unknown>;
+    };
 
 export class TangledApi extends Context.Service<
   TangledApi,
@@ -370,6 +402,7 @@ export class TangledApi extends Context.Service<
       readonly limit: number;
       readonly cursor?: string | null;
     }) => Effect.Effect<TangledPage<TangledTicket>, TangledApiError>;
+    /** Cached for seconds, so the reads of one pull request share it. */
     readonly getTicket: (input: {
       readonly repoDid: string;
       readonly rkey: string;
@@ -378,11 +411,17 @@ export class TangledApi extends Context.Service<
     readonly listRounds: (
       ticketUri: string,
     ) => Effect.Effect<ReadonlyArray<TangledRound>, TangledApiError>;
-    /** One ticket's rounds, or every ticket's under a repository's `at://<repoDid>`; all without one. */
-    readonly forgetRounds: (uri?: string) => Effect.Effect<void>;
+    /**
+     * Drops the cached ticket and rounds of one ticket, or of every ticket under a repository's
+     * `at://<repoDid>`; all of them without one.
+     */
+    readonly forgetReads: (uri?: string) => Effect.Effect<void>;
+    /** Newest first, as Tangled lists them. */
     readonly listComments: (
       subjectUri: string,
     ) => Effect.Effect<ReadonlyArray<TangledComment>, TangledApiError>;
+    /** When the newest comment was left, from a one-comment page; null without any. */
+    readonly latestCommentAt: (subjectUri: string) => Effect.Effect<string | null, TangledApiError>;
     /** Null when the ref does not exist. */
     readonly getRef: (input: {
       readonly repoDid: string;
@@ -404,6 +443,7 @@ export class TangledApi extends Context.Service<
       readonly commit: string;
       readonly path: string;
     }) => Effect.Effect<string | null, TangledApiError>;
+    /** Cached briefly; commits never change, so neither does their diff. */
     readonly getDiff: (input: {
       readonly baseRepoDid: string;
       readonly baseCommit: string;
@@ -412,11 +452,11 @@ export class TangledApi extends Context.Service<
     }) => Effect.Effect<ReadonlyArray<TangledFileDiff>, TangledApiError>;
     /**
      * What changed from one round to a later one: `from` rebased onto `to`'s base, against `to`'s
-     * head, so commits the target gained in between do not show.
+     * head, so commits the target gained in between do not show. Cached briefly.
      */
     readonly getInterdiff: (input: {
-      readonly from: Pick<TangledRound, "baseOid" | "headOid" | "sourceRepoDid">;
-      readonly to: Pick<TangledRound, "baseOid" | "headOid" | "sourceRepoDid">;
+      readonly from: RoundRange;
+      readonly to: RoundRange;
     }) => Effect.Effect<ReadonlyArray<TangledFileDiff>, TangledApiError>;
     readonly mergeCheck: (input: {
       readonly targetRepoDid: string;
@@ -446,18 +486,15 @@ export class TangledApi extends Context.Service<
       readonly knot: string;
       readonly name: string;
       readonly createdAt: string;
-    }) => Effect.Effect<string, TangledApiError | TangledAuthError>;
+    }) => Effect.Effect<string, TangledError>;
     readonly deleteRepo: (input: {
       readonly knot: string;
       readonly repoDid: string;
-    }) => Effect.Effect<void, TangledApiError | TangledAuthError>;
-    /** A procedure authorized by a service-auth token minted for exactly this call. */
+    }) => Effect.Effect<void, TangledError>;
+    /** The record a write answered with, or null when it answered with none. */
     readonly write: (
       input: TangledWrite,
-    ) => Effect.Effect<
-      { readonly uri: string; readonly cid: string } | null,
-      TangledApiError | TangledAuthError
-    >;
+    ) => Effect.Effect<{ readonly uri: string; readonly cid: string } | null, TangledError>;
   }
 >()("@t3tools/source-control-tangled/server/TangledApi") {}
 
@@ -472,10 +509,12 @@ const reasonForStatus = (status: number, error: string | undefined): TangledApiE
           ? "conflict"
           : "failed";
 
-const query = (params: Record<string, string | number | ReadonlyArray<string> | undefined>) => {
+type QueryParams = Record<string, string | number | ReadonlyArray<string> | null | undefined>;
+
+const query = (params: QueryParams) => {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (value === undefined) continue;
+    if (value === undefined || value === null) continue;
     for (const item of typeof value === "object" ? value : [value])
       search.append(key, String(item));
   }
@@ -485,11 +524,57 @@ const query = (params: Record<string, string | number | ReadonlyArray<string> | 
 const decodeProblem = Schema.decodeUnknownOption(Schema.fromJsonString(XrpcProblem));
 const decodeReceipt = Schema.decodeOption(Schema.fromJsonString(Receipt));
 const decodeCreatedRepo = Schema.decodeOption(Schema.fromJsonString(CreatedRepo));
+const decodeTicketItem = Schema.decodeUnknownOption(TicketItem);
+
+const toTicket = (
+  record: {
+    readonly uri: string;
+    readonly cid: string;
+    readonly authorDid: string;
+    readonly state: string;
+    readonly stateUpdatedAt?: string | null | undefined;
+    readonly commentCount?: number | undefined;
+  },
+  fields: typeof TicketFields.Type,
+): TangledTicket => ({
+  uri: record.uri,
+  cid: record.cid,
+  rkey: rkeyOf(record.uri),
+  authorDid: record.authorDid,
+  title: fields.title.text,
+  body: fields.body?.text ?? "",
+  state: ticketState(record.state),
+  stateUpdatedAt: record.stateUpdatedAt ?? null,
+  targetBranch: fields.targetBranch ?? "",
+  createdAt: fields.createdAt,
+  commentCount: record.commentCount ?? 0,
+});
+
+const toComment = (comment: typeof Comment.Type): TangledComment => ({
+  uri: comment.uri,
+  cid: comment.cid,
+  authorDid: comment.editor,
+  body: comment.body?.text ?? "",
+  createdAt: comment.createdAt,
+  replyTo: comment.replyTo?.uri ?? null,
+});
+
+/** Lookups whose failures are not kept, so the next read asks again. */
+const cached = <K, A, E>(
+  lookup: (key: K) => Effect.Effect<A, E>,
+  timeToLive: Duration.Input,
+  capacity = CACHE_CAPACITY,
+) =>
+  Cache.makeWith(lookup, {
+    capacity,
+    timeToLive: (exit) => (Exit.isSuccess(exit) ? timeToLive : Duration.zero),
+  });
 
 /** @public */
 export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const auth = yield* TangledAuth;
+  const guardHost = yield* PublicHostGuard;
 
   const send = Effect.fn("TangledApi.send")(function* (input: {
     readonly operation: string;
@@ -514,6 +599,15 @@ export const make = Effect.gen(function* () {
         ...(fields.cause === undefined ? {} : { cause: fields.cause }),
       });
     yield* Effect.annotateCurrentSpan({ "tangled.operation": input.operation });
+    // Knots and spindles are named by records anyone can write, so neither reads nor tokens go to
+    // a private address.
+    const host = new URL(input.url).hostname;
+    if (host !== BOBBIN_HOST)
+      yield* guardHost(host).pipe(
+        Effect.mapError((cause) =>
+          fail({ status: null, reason: "failed", detail: cause.message, cause }),
+        ),
+      );
     let request = HttpClientRequest.make(input.method ?? "GET")(input.url).pipe(
       HttpClientRequest.setHeaders({ "user-agent": "t3code" }),
     );
@@ -549,7 +643,7 @@ export const make = Effect.gen(function* () {
 
   const read = <S extends Schema.Codec<unknown, unknown, never, never>>(
     nsid: string,
-    params: Parameters<typeof query>[0],
+    params: QueryParams,
     schema: S,
     service = BOBBIN,
   ) =>
@@ -570,30 +664,46 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const identities = yield* Cache.makeWith<
-    string,
-    { readonly did: string; readonly handle: string | null },
-    TangledApiError
-  >(
-    (identifier) =>
-      read(NSID.resolveIdentity, { identifier }, Identity).pipe(
+  /** Every item of a paged listing, up to `MAX_LISTED`. */
+  const readAll = <S extends Schema.Codec<unknown, unknown, never, never>>(
+    nsid: string,
+    params: QueryParams,
+    item: S,
+  ) => {
+    const Page = Schema.Struct({ items: Schema.Array(item), cursor: Cursor });
+    return Effect.gen(function* () {
+      const collected: Array<S["Type"]> = [];
+      let cursor: string | null = null;
+      do {
+        const page: typeof Page.Type = yield* read(
+          nsid,
+          { ...params, limit: PAGE_SIZE, cursor },
+          Page,
+        );
+        collected.push(...page.items);
+        cursor = page.items.length === 0 ? null : (page.cursor ?? null);
+      } while (cursor !== null && collected.length < MAX_LISTED);
+      return collected;
+    });
+  };
+
+  const identities = yield* cached(
+    (identifier: string) =>
+      read(NSID.resolveIdentity, { identifier }, MiniDoc).pipe(
         Effect.map((identity) => ({
           did: identity.did,
           // atproto's placeholder for a handle that no longer verifies.
           handle: identity.handle === "handle.invalid" ? null : identity.handle,
         })),
       ),
-    {
-      capacity: CACHE_CAPACITY,
-      timeToLive: (exit) => (Exit.isSuccess(exit) ? IDENTITY_TTL : Duration.zero),
-    },
+    IDENTITY_TTL,
   );
   const resolveIdentity = (identifier: string) => Cache.get(identities, identifier.toLowerCase());
 
   const toRepository = Effect.fn("TangledApi.toRepository")(function* (
     manifest: typeof Manifest.Type,
   ) {
-    const repoDid = manifest.uri.replace(/^at:\/\//u, "").split("/")[0] ?? "";
+    const repoDid = repoDidOfUri(manifest.uri);
     const owner = yield* resolveIdentity(manifest.value.declaration.owner).pipe(
       Effect.orElseSucceed(() => ({ did: manifest.value.declaration.owner, handle: null })),
     );
@@ -615,230 +725,201 @@ export const make = Effect.gen(function* () {
     } satisfies TangledRepository;
   });
 
-  const repositories: Cache.Cache<string, TangledRepository, TangledApiError> =
-    yield* Cache.makeWith<string, TangledRepository, TangledApiError>(
-      (key) => {
-        const [, path = ""] = /^[^/]+\/(.+)$/u.exec(key) ?? [];
-        const [first = "", name] = path.split("/");
-        const manifest =
-          name === undefined
-            ? read(NSID.getRepoByRepoDid, { repoDid: first }, Manifest)
-            : resolveIdentity(first).pipe(
-                Effect.flatMap((owner) =>
-                  read(NSID.getRepoByName, { owner: owner.did, name }, Manifest),
+  // Keyed by the reference itself; names are case-insensitive, so a named one is lowercased.
+  const normalize = (reference: TangledRepositoryRef): TangledRepositoryRef =>
+    reference.kind === "repo-did"
+      ? { kind: "repo-did", repoDid: reference.repoDid }
+      : { kind: "named", owner: reference.owner.toLowerCase(), name: reference.name.toLowerCase() };
+
+  const repositories: Cache.Cache<TangledRepositoryRef, TangledRepository, TangledApiError> =
+    yield* cached(
+      (reference: TangledRepositoryRef) =>
+        reference.kind === "repo-did"
+          ? read(NSID.getRepoByRepoDid, { repoDid: reference.repoDid }, Manifest).pipe(
+              Effect.flatMap(toRepository),
+            )
+          : resolveIdentity(reference.owner).pipe(
+              Effect.flatMap((owner) =>
+                read(NSID.getRepoByName, { owner: owner.did, name: reference.name }, Manifest),
+              ),
+              Effect.flatMap(toRepository),
+              Effect.tap((repository) =>
+                Cache.set(
+                  repositories,
+                  { kind: "repo-did", repoDid: repository.repoDid },
+                  repository,
                 ),
-              );
-        return manifest.pipe(
-          Effect.flatMap(toRepository),
-          Effect.tap((repository) =>
-            name === undefined
-              ? Effect.void
-              : Cache.set(repositories, repositoryKey(repository), repository),
-          ),
-        );
-      },
-      {
-        capacity: CACHE_CAPACITY,
-        timeToLive: (exit) => (Exit.isSuccess(exit) ? REPOSITORY_TTL : Duration.zero),
-      },
+              ),
+            ),
+      REPOSITORY_TTL,
     );
 
-  const maintainers = yield* Cache.makeWith<string, ReadonlySet<string>, TangledApiError>(
-    Effect.fn("TangledApi.readMaintainers")(function* (key: string) {
-      const [repoDid = "", ownerDid = ""] = key.split(" ");
-      const page = yield* read(
+  const maintainers = yield* cached(
+    (repository: { readonly repoDid: string; readonly ownerDid: string }) =>
+      read(
         NSID.listCollaborators,
-        { subject: repoDid, limit: 1000 },
+        { subject: repository.repoDid, limit: MAX_LISTED },
         Collaborators,
-      );
-      return new Set([ownerDid, ...page.items.map((item) => item.subject)]);
-    }),
-    {
-      capacity: CACHE_CAPACITY,
-      timeToLive: (exit) => (Exit.isSuccess(exit) ? REPOSITORY_TTL : Duration.zero),
-    },
+      ).pipe(
+        Effect.map(
+          (page): ReadonlySet<string> =>
+            new Set([repository.ownerDid, ...page.items.map((item) => item.subject)]),
+        ),
+      ),
+    REPOSITORY_TTL,
   );
 
-  const toTicket = (item: typeof TicketItem.Type): TangledTicket => ({
-    uri: item.uri,
-    cid: item.cid,
-    rkey: rkeyOf(item.uri),
-    authorDid: item.author,
-    title: item.value.title.text,
-    body: item.value.body?.text ?? "",
-    state: ticketState(item.state),
-    stateUpdatedAt: item.stateUpdatedAt ?? null,
-    targetBranch: item.value.targetBranch ?? "",
-    createdAt: item.value.createdAt,
-    commentCount: item.commentCount ?? 0,
-  });
-  const decodeTicketItem = Schema.decodeUnknownOption(TicketItem);
+  const tickets = yield* cached(
+    (uri: string) =>
+      read(NSID.getTicketView, { uri }, TicketView).pipe(
+        Effect.map((view) => ({
+          ...toTicket({ ...view, authorDid: view.author.did }, view),
+          authorHandle: view.author.handle,
+        })),
+      ),
+    TICKET_TTL,
+  );
 
-  const rounds = yield* Cache.makeWith<string, ReadonlyArray<TangledRound>, TangledApiError>(
+  const rounds = yield* cached(
     Effect.fn("TangledApi.readRounds")(function* (uri: string) {
-      const repoDid = uri.replace(/^at:\/\//u, "").split("/")[0] ?? "";
-      const collected: Array<TangledRound> = [];
-      let cursor: string | null = null;
-      do {
-        const page: typeof PatchPage.Type = yield* read(
-          NSID.listPatches,
-          { ticket: uri, order: "asc", limit: 100, cursor: cursor ?? undefined },
-          PatchPage,
-        );
-        for (const patch of page.items)
-          collected.push({
-            round: collected.length + 1,
-            uri: patch.uri,
-            cid: patch.cid,
-            baseOid: patch.value.base.oid,
-            headOid: patch.value.head.oid,
-            sourceRepoDid: patch.value.source?.repo || repoDid,
-            sourceBranch: patch.value.source?.branch ?? null,
-            createdAt: patch.value.createdAt,
-          });
-        cursor = page.items.length === 0 ? null : (page.cursor ?? null);
-      } while (cursor !== null && collected.length < 1_000);
-      return collected;
+      const repoDid = repoDidOfUri(uri);
+      const patches = yield* readAll(NSID.listPatches, { ticket: uri, order: "asc" }, Patch);
+      return patches.map((patch, index): TangledRound => ({
+        round: index + 1,
+        uri: patch.uri,
+        cid: patch.cid,
+        baseOid: patch.value.base.oid,
+        headOid: patch.value.head.oid,
+        sourceRepoDid: patch.value.source?.repo || repoDid,
+        sourceBranch: patch.value.source?.branch ?? null,
+        createdAt: patch.value.createdAt,
+      }));
     }),
-    {
-      capacity: CACHE_CAPACITY,
-      timeToLive: (exit) => (Exit.isSuccess(exit) ? ROUNDS_TTL : Duration.zero),
-    },
+    ROUNDS_TTL,
   );
 
-  const write = Effect.fn("TangledApi.write")(function* (input: TangledWrite) {
-    const { repository, nsid } = input;
+  const diffs = yield* cached(
+    (params: Readonly<Record<string, string>>) =>
+      read(NSID.getDiff, params, Diffs).pipe(Effect.map((result) => result.diffs)),
+    DIFF_TTL,
+    DIFF_CAPACITY,
+  );
+  const interdiffs = yield* cached(
+    (params: Readonly<Record<string, string>>) =>
+      read(NSID.getInterdiff, params, Diffs).pipe(Effect.map((result) => result.diffs)),
+    DIFF_TTL,
+    DIFF_CAPACITY,
+  );
+
+  const authorizedCall = Effect.fn("TangledApi.authorizedCall")(function* (input: TangledWrite) {
     // Record writes and patches are the repository's own; merges push to its knot.
-    const aud = input.service === "bobbin" ? serviceDid(repository.knot) : repository.repoDid;
-    const lxm = input.service === "bobbin" ? NSID.receivePack : nsid;
-    const token = yield* auth.serviceAuth({ aud, lxm });
-    const base = input.service === "bobbin" ? BOBBIN : `https://${repository.knot}`;
+    const target =
+      input.service === "knot-host"
+        ? { aud: serviceDid(input.knot), lxm: input.nsid, base: `https://${input.knot}` }
+        : input.service === "bobbin"
+          ? {
+              aud: serviceDid(input.repository.knot),
+              lxm: NSID.receivePack,
+              base: BOBBIN,
+            }
+          : {
+              aud: input.repository.repoDid,
+              lxm: input.nsid,
+              base: `https://${input.repository.knot}`,
+            };
+    const token = yield* auth.serviceAuth({ aud: target.aud, lxm: target.lxm });
     const text = yield* send({
-      operation: nsid,
-      url: `${base}/xrpc/${nsid}`,
+      operation: input.nsid,
+      url: `${target.base}/xrpc/${input.nsid}`,
       method: "POST",
       token,
-      body: input.service === "knot" ? { repo: repository.repoDid, ...input.body } : input.body,
+      body:
+        input.service === "knot" ? { repo: input.repository.repoDid, ...input.body } : input.body,
     });
-    return text.trim().length === 0 ? null : Option.getOrNull(decodeReceipt(text));
+    return { text, receipt: Option.getOrNull(decodeReceipt(text)) };
   });
 
-  const createRepo = Effect.fn("TangledApi.createRepo")(function* (input: {
-    readonly knot: string;
-    readonly name: string;
-    readonly createdAt: string;
-  }) {
-    const token = yield* auth.serviceAuth({ aud: serviceDid(input.knot), lxm: NSID.createRepo });
-    const text = yield* send({
-      operation: NSID.createRepo,
-      url: `https://${input.knot}/xrpc/${NSID.createRepo}`,
-      method: "POST",
-      token,
-      body: { name: input.name, createdAt: input.createdAt },
-    });
-    const created = Option.filter(decodeCreatedRepo(text), (repo) => isDid(repo.did));
-    if (Option.isNone(created))
-      return yield* new TangledApiError({
-        operation: NSID.createRepo,
-        status: null,
-        reason: "failed",
-        detail: `${input.knot} did not name the new repository's DID.`,
-      });
-    return created.value.did;
-  });
-
-  const deleteRepo = Effect.fn("TangledApi.deleteRepo")(function* (input: {
-    readonly knot: string;
-    readonly repoDid: string;
-  }) {
-    const token = yield* auth.serviceAuth({ aud: serviceDid(input.knot), lxm: NSID.deleteRepo });
-    yield* send({
-      operation: NSID.deleteRepo,
-      url: `https://${input.knot}/xrpc/${NSID.deleteRepo}`,
-      method: "POST",
-      token,
-      body: { repo: input.repoDid },
-    });
+  const forgetIn = Effect.fn("TangledApi.forgetIn")(function* <A, E>(
+    cache: Cache.Cache<string, A, E>,
+    uri: string | undefined,
+  ) {
+    if (uri === undefined) return yield* Cache.invalidateAll(cache);
+    for (const key of Array.from(yield* Cache.keys(cache)))
+      if (key === uri || key.startsWith(`${uri}/`)) yield* Cache.invalidate(cache, key);
   });
 
   return TangledApi.of({
     resolveIdentity,
-    createRepo,
-    deleteRepo,
+    createRepo: Effect.fn("TangledApi.createRepo")(function* (input) {
+      const { text } = yield* authorizedCall({
+        service: "knot-host",
+        knot: input.knot,
+        nsid: NSID.createRepo,
+        body: { name: input.name, createdAt: input.createdAt },
+      });
+      const created = Option.filter(decodeCreatedRepo(text), (repo) => isDid(repo.did));
+      if (Option.isNone(created))
+        return yield* new TangledApiError({
+          operation: NSID.createRepo,
+          status: null,
+          reason: "failed",
+          detail: `${input.knot} did not name the new repository's DID.`,
+        });
+      return created.value.did;
+    }),
+    deleteRepo: Effect.fn("TangledApi.deleteRepo")(function* (input) {
+      yield* authorizedCall({
+        service: "knot-host",
+        knot: input.knot,
+        nsid: NSID.deleteRepo,
+        body: { repo: input.repoDid },
+      });
+    }),
     listMaintainers: Effect.fn("TangledApi.listMaintainers")((repository) =>
-      Cache.get(maintainers, `${repository.repoDid} ${repository.ownerDid}`),
+      Cache.get(maintainers, { repoDid: repository.repoDid, ownerDid: repository.ownerDid }),
     ),
     resolveRepository: Effect.fn("TangledApi.resolveRepository")((reference) =>
-      Cache.get(repositories, tangledRepositoryKey(reference)),
+      Cache.get(repositories, normalize(reference)),
     ),
     cachedRepository: Effect.fn("TangledApi.cachedRepository")((reference) =>
-      Cache.getSuccess(repositories, tangledRepositoryKey(reference)),
+      Cache.getSuccess(repositories, normalize(reference)),
     ),
     listPulls: Effect.fn("TangledApi.listPulls")(function* (input) {
       const page = yield* read(
         NSID.listPulls,
-        {
-          subject: input.repoDid,
-          status: input.state,
-          limit: input.limit,
-          cursor: input.cursor ?? undefined,
-        },
-        TicketPage,
+        { subject: input.repoDid, status: input.state, limit: input.limit, cursor: input.cursor },
+        // Rows are decoded one at a time, so one that is not a ticket is skipped.
+        Schema.Struct({ items: Schema.Array(Schema.Unknown), cursor: Cursor }),
       );
       return {
-        items: page.items.flatMap((raw) => Option.toArray(decodeTicketItem(raw)).map(toTicket)),
+        items: page.items.flatMap((raw) =>
+          Option.toArray(decodeTicketItem(raw)).map((item) =>
+            toTicket({ ...item, authorDid: item.author }, item.value),
+          ),
+        ),
         cursor: page.items.length === 0 ? null : (page.cursor ?? null),
       };
     }),
-    getTicket: Effect.fn("TangledApi.getTicket")(function* (input) {
-      const view = yield* read(
-        NSID.getTicketView,
-        { uri: ticketUri(input.repoDid, input.rkey) },
-        TicketView,
-      );
-      return {
-        uri: view.uri,
-        cid: view.cid,
-        rkey: rkeyOf(view.uri),
-        authorDid: view.author.did,
-        authorHandle: view.author.handle,
-        title: view.title.text,
-        body: view.body?.text ?? "",
-        state: ticketState(view.state),
-        stateUpdatedAt: null,
-        targetBranch: view.targetBranch ?? "",
-        createdAt: view.createdAt,
-        commentCount: 0,
-      };
-    }),
+    getTicket: Effect.fn("TangledApi.getTicket")((input) =>
+      Cache.get(tickets, ticketUri(input.repoDid, input.rkey)),
+    ),
     listRounds: Effect.fn("TangledApi.listRounds")((uri) => Cache.get(rounds, uri)),
-    forgetRounds: Effect.fn("TangledApi.forgetRounds")(function* (uri) {
-      if (uri === undefined) return yield* Cache.invalidateAll(rounds);
-      for (const key of Array.from(yield* Cache.keys(rounds)))
-        if (key === uri || key.startsWith(`${uri}/`)) yield* Cache.invalidate(rounds, key);
+    forgetReads: Effect.fn("TangledApi.forgetReads")(function* (uri) {
+      yield* forgetIn(rounds, uri);
+      yield* forgetIn(tickets, uri);
     }),
-    listComments: Effect.fn("TangledApi.listComments")(function* (subjectUri) {
-      const collected: Array<TangledComment> = [];
-      let cursor: string | null = null;
-      do {
-        const page: typeof CommentPage.Type = yield* read(
-          NSID.listComments,
-          { subject: subjectUri, limit: 100, cursor: cursor ?? undefined },
-          CommentPage,
-        );
-        for (const comment of page.items)
-          collected.push({
-            uri: comment.uri,
-            cid: comment.cid,
-            authorDid: comment.editor,
-            body: comment.body?.text ?? "",
-            createdAt: comment.createdAt,
-            replyTo: comment.replyTo?.uri ?? null,
-          });
-        cursor = page.items.length === 0 ? null : (page.cursor ?? null);
-      } while (cursor !== null && collected.length < 1_000);
-      return collected;
-    }),
+    listComments: Effect.fn("TangledApi.listComments")((subjectUri) =>
+      readAll(NSID.listComments, { subject: subjectUri }, Comment).pipe(
+        Effect.map((comments) => comments.map(toComment)),
+      ),
+    ),
+    latestCommentAt: Effect.fn("TangledApi.latestCommentAt")((subjectUri) =>
+      read(
+        NSID.listComments,
+        { subject: subjectUri, limit: 1 },
+        Schema.Struct({ items: Schema.Array(Comment) }),
+      ).pipe(Effect.map((page) => page.items[0]?.createdAt ?? null)),
+    ),
     getRef: Effect.fn("TangledApi.getRef")((input) =>
       read(NSID.getRef, { repo: input.repoDid, ref: input.ref }, Ref).pipe(
         Effect.map((ref): string | null => ref.oid),
@@ -869,31 +950,23 @@ export const make = Effect.gen(function* () {
       }).pipe(Effect.map((text) => (text.length > MAX_BLOB_BYTES ? null : text))),
     ),
     getDiff: Effect.fn("TangledApi.getDiff")((input) =>
-      read(
-        NSID.getDiff,
-        {
-          baseRepo: input.baseRepoDid,
-          baseCommit: input.baseCommit,
-          headRepo: input.headRepoDid,
-          headCommit: input.headCommit,
-        },
-        Diffs,
-      ).pipe(Effect.map((result) => result.diffs)),
+      Cache.get(diffs, {
+        baseRepo: input.baseRepoDid,
+        baseCommit: input.baseCommit,
+        headRepo: input.headRepoDid,
+        headCommit: input.headCommit,
+      }),
     ),
     getInterdiff: Effect.fn("TangledApi.getInterdiff")((input) =>
-      read(
-        NSID.getInterdiff,
-        // Named for the two rounds, not two sides: `base*` is the earlier round's range.
-        {
-          baseRepo: input.from.sourceRepoDid,
-          baseCommit1: input.from.baseOid,
-          baseCommit2: input.from.headOid,
-          headRepo: input.to.sourceRepoDid,
-          headCommit1: input.to.baseOid,
-          headCommit2: input.to.headOid,
-        },
-        Diffs,
-      ).pipe(Effect.map((result) => result.diffs)),
+      // Named for the two rounds, not two sides: `base*` is the earlier round's range.
+      Cache.get(interdiffs, {
+        baseRepo: input.from.sourceRepoDid,
+        baseCommit1: input.from.baseOid,
+        baseCommit2: input.from.headOid,
+        headRepo: input.to.sourceRepoDid,
+        headCommit1: input.to.baseOid,
+        headCommit2: input.to.headOid,
+      }),
     ),
     mergeCheck: Effect.fn("TangledApi.mergeCheck")((input) =>
       read(
@@ -931,7 +1004,11 @@ export const make = Effect.gen(function* () {
         `https://${input.repository.knot}`,
       ),
     ),
-    write,
+    write: Effect.fn("TangledApi.write")((input) =>
+      authorizedCall(input).pipe(
+        Effect.map(({ text, receipt }) => (text.trim().length === 0 ? null : receipt)),
+      ),
+    ),
   });
 });
 

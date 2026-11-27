@@ -1,127 +1,127 @@
-// @effect-diagnostics nodeBuiltinImport:off - verifies signatures with node:crypto against the plain Worker.
-import * as NodeCrypto from "node:crypto";
+// @effect-diagnostics nodeBuiltinImport:off - runs the Worker's SQL and migrations on node:sqlite.
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import worker, { assertionClaims, clientId, type Env } from "./worker.ts";
+import worker, { CALLBACK_SECONDS, clientMetadata, type Env } from "./worker.ts";
 
 const ORIGIN = "https://t3-oauth.example";
-const ID = clientId(ORIGIN);
 const NOW = 1_800_000_000;
+const STATE = "AAAAAAAAAAAAAAAAAAAAAA";
+const MIGRATIONS = NodePath.join(import.meta.dirname, "..", "migrations");
 
-function fakeDb() {
-  const rows = new Map<string, { query: string; created_at: number }>();
-  const statement = (sql: string, args: ReadonlyArray<unknown> = []) => ({
-    bind: (...values: ReadonlyArray<unknown>) => statement(sql, values),
-    run: async () => {
-      if (sql.startsWith("DELETE FROM callbacks WHERE created_at")) {
-        for (const [state, row] of rows)
-          if (row.created_at < (args[0] as number)) rows.delete(state);
-      } else if (sql.startsWith("INSERT")) {
-        rows.set(args[0] as string, { query: args[1] as string, created_at: args[2] as number });
-      }
-    },
-    first: async () => {
-      const row = rows.get(args[0] as string);
-      if (row === undefined || row.created_at < (args[1] as number)) return null;
-      rows.delete(args[0] as string);
-      return { query: row.query };
-    },
+/** D1's statement API over an in-memory SQLite database with the Worker's migrations applied. */
+function sqliteD1(): D1Database {
+  const db = new NodeSqlite.DatabaseSync(":memory:");
+  for (const file of NodeFS.readdirSync(MIGRATIONS).toSorted())
+    db.exec(NodeFS.readFileSync(NodePath.join(MIGRATIONS, file), "utf8"));
+  const statement = (sql: string, args: ReadonlyArray<NodeSqlite.SQLInputValue> = []) => ({
+    bind: (...values: ReadonlyArray<NodeSqlite.SQLInputValue>) => statement(sql, values),
+    run: async () => ({ meta: { changes: Number(db.prepare(sql).run(...args).changes) } }),
+    first: async () => db.prepare(sql).get(...args) ?? null,
   });
   return {
     prepare: (sql: string) => statement(sql),
-    batch: async (statements: ReadonlyArray<{ run: () => Promise<void> }>) => {
-      for (const s of statements) await s.run();
+    batch: async (statements: ReadonlyArray<{ run: () => Promise<unknown> }>) => {
+      const results = [];
+      for (const s of statements) results.push(await s.run());
+      return results;
     },
   } as unknown as D1Database;
 }
 
-function env(): Env {
-  const { privateKey } = NodeCrypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
-  const jwk = { ...privateKey.export({ format: "jwk" }), kid: "test-key" };
-  return { DB: fakeDb(), SIGNING_KEY: JSON.stringify(jwk), ORIGIN };
+function relay() {
+  const env: Env = { DB: sqliteD1(), ORIGIN };
+  const call = (path: string, init?: RequestInit) =>
+    worker.fetch(new Request(`${ORIGIN}${path}`, init), env);
+  const start = async (state = STATE) => {
+    const response = await call("/tangled/start", {
+      method: "POST",
+      body: JSON.stringify({ state }),
+    });
+    return { response, ...((await response.clone().json()) as { pollToken?: string }) };
+  };
+  const poll = (pollToken: string | undefined, state = STATE) =>
+    call(`/tangled/callback/${state}`, {
+      headers: pollToken === undefined ? {} : { authorization: `Bearer ${pollToken}` },
+    });
+  const callback = (query: string) => call(`/tangled/callback?${query}`);
+  return { call, start, poll, callback };
 }
 
-describe("assertionClaims", () => {
-  const valid = { iss: ID, sub: ID, aud: "https://bsky.social", jti: "abcdefgh", iat: NOW };
-
-  it("signs only this client's assertions for an HTTPS audience issued now", () => {
-    expect(assertionClaims(valid, ORIGIN, NOW)).toEqual(valid);
-    expect(assertionClaims({ ...valid, iss: "https://other/client.json" }, ORIGIN, NOW)).toBeNull();
-    expect(assertionClaims({ ...valid, sub: "did:plc:someone" }, ORIGIN, NOW)).toBeNull();
-    expect(assertionClaims({ ...valid, aud: "http://bsky.social" }, ORIGIN, NOW)).toBeNull();
-    expect(assertionClaims({ ...valid, iat: NOW - 120 }, ORIGIN, NOW)).toBeNull();
-    expect(assertionClaims({ ...valid, jti: "x" }, ORIGIN, NOW)).toBeNull();
-    expect(assertionClaims(null, ORIGIN, NOW)).toBeNull();
+describe("relay", () => {
+  it("publishes a public client whose tokens are DPoP-bound", async () => {
+    const response = await relay().call("/tangled/client-metadata.json");
+    const metadata = (await response.json()) as ReturnType<typeof clientMetadata>;
+    expect(metadata).toMatchObject({
+      client_id: `${ORIGIN}/tangled/client-metadata.json`,
+      redirect_uris: [`${ORIGIN}/tangled/callback`],
+      token_endpoint_auth_method: "none",
+      dpop_bound_access_tokens: true,
+    });
+    expect(metadata).not.toHaveProperty("jwks_uri");
+    expect(metadata.scope.split(" ")).not.toContain("blob:image/*");
   });
-});
 
-describe("worker", () => {
-  it("serves an assertion that verifies against the published key", async () => {
-    const e = env();
+  it("signs nothing: the assertion and key routes are gone", async () => {
+    const { call } = relay();
+    expect((await call("/tangled/assertion", { method: "POST", body: "{}" })).status).toBe(404);
+    expect((await call("/tangled/jwks.json")).status).toBe(404);
+  });
+
+  it("hands a filed state's callback once, and only to its poll token", async () => {
     using _now = vi.spyOn(Date, "now").mockReturnValue(NOW * 1000);
-    const iat = NOW;
-    const response = await worker.fetch(
-      new Request(`${ORIGIN}/tangled/assertion`, {
-        method: "POST",
-        body: JSON.stringify({
-          iss: ID,
-          sub: ID,
-          aud: "https://bsky.social",
-          jti: "abcdefgh",
-          iat,
-        }),
-      }),
-      e,
+    const { start, poll, callback } = relay();
+    const { pollToken } = await start();
+    expect(pollToken).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect((await poll(pollToken)).status).toBe(204);
+
+    const query = `code=abc&state=${STATE}&iss=https%3A%2F%2Fbsky.social&extra=1`;
+    expect((await callback(query)).status).toBe(200);
+    expect((await poll(undefined)).status).toBe(401);
+    expect((await poll("x".repeat(43))).status).toBe(404);
+
+    const delivered = await poll(pollToken);
+    expect(new URLSearchParams(await delivered.text())).toEqual(
+      new URLSearchParams({ code: "abc", state: STATE, iss: "https://bsky.social" }),
     );
-    const { assertion } = (await response.json()) as { assertion: string };
-    const jwks = (await (
-      await worker.fetch(new Request(`${ORIGIN}/tangled/jwks.json`), e)
-    ).json()) as {
-      keys: ReadonlyArray<JsonWebKey & { kid: string }>;
-    };
-    const [header, payload, signature] = assertion.split(".") as [string, string, string];
-    expect(JSON.parse(Buffer.from(header, "base64url").toString())).toMatchObject({
-      alg: "ES256",
-      kid: "test-key",
-    });
-    expect(JSON.parse(Buffer.from(payload, "base64url").toString())).toMatchObject({
-      aud: "https://bsky.social",
-    });
-    const key = NodeCrypto.createPublicKey({ key: jwks.keys[0] as never, format: "jwk" });
-    expect(
-      NodeCrypto.verify(
-        "sha256",
-        Buffer.from(`${header}.${payload}`),
-        { key, dsaEncoding: "ieee-p1363" },
-        Buffer.from(signature, "base64url"),
-      ),
-    ).toBe(true);
-    expect(jwks.keys[0]).not.toHaveProperty("d");
+    expect((await poll(pollToken)).status).toBe(404);
   });
 
-  it("hands a callback to the server once", async () => {
-    const e = env();
-    const state = "AAAAAAAAAAAAAAAAAAAAAA";
-    const callback = await worker.fetch(
-      new Request(
-        `${ORIGIN}/tangled/callback?code=abc&state=${state}&iss=https%3A%2F%2Fbsky.social&extra=1`,
-      ),
-      e,
-    );
-    expect(callback.status).toBe(200);
-    const first = await worker.fetch(new Request(`${ORIGIN}/tangled/callback/${state}`), e);
-    expect(new URLSearchParams(await first.text())).toEqual(
-      new URLSearchParams({ code: "abc", state, iss: "https://bsky.social" }),
-    );
-    const second = await worker.fetch(new Request(`${ORIGIN}/tangled/callback/${state}`), e);
-    expect(second.status).toBe(204);
+  it("refuses a callback for a state no server filed", async () => {
+    const { callback, start, poll } = relay();
+    expect((await callback(`code=abc&state=${STATE}`)).status).toBe(400);
+    expect((await callback("code=abc&state=x")).status).toBe(400);
+    // Filing it afterwards does not resurrect the stray callback.
+    const { pollToken } = await start();
+    expect((await poll(pollToken)).status).toBe(204);
   });
 
-  it("refuses a callback without a valid state", async () => {
-    const response = await worker.fetch(
-      new Request(`${ORIGIN}/tangled/callback?code=abc&state=x`),
-      env(),
-    );
-    expect(response.status).toBe(400);
+  it("never lets a second callback replace the first", async () => {
+    const { start, poll, callback } = relay();
+    const { pollToken } = await start();
+    expect((await callback(`code=first&state=${STATE}`)).status).toBe(200);
+    expect((await callback(`code=hijack&state=${STATE}`)).status).toBe(400);
+    expect(new URLSearchParams(await (await poll(pollToken)).text()).get("code")).toBe("first");
+  });
+
+  it("refuses to file a state twice, or one that is malformed", async () => {
+    const { start } = relay();
+    expect((await start()).response.status).toBe(200);
+    expect((await start()).response.status).toBe(409);
+    expect((await start("short")).response.status).toBe(400);
+  });
+
+  it("forgets a sign-in once it expires", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(NOW * 1000);
+    const { start, poll, callback } = relay();
+    const { pollToken } = await start();
+    now.mockReturnValue((NOW + CALLBACK_SECONDS + 1) * 1000);
+    expect((await callback(`code=late&state=${STATE}`)).status).toBe(400);
+    expect((await poll(pollToken)).status).toBe(404);
+    // The next start sweeps the expired row, so the same state can be filed again.
+    expect((await start()).response.status).toBe(200);
+    now.mockRestore();
   });
 });
