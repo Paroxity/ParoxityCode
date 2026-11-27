@@ -4,13 +4,13 @@ This fork is an upstream T3 Code release plus Jujutsu (jj) support and a Tangled
 
 ## What the fork carries
 
-`kaeden/stable` is an upstream release tag on `pingdotgg/t3code` with a short stack of fork commits on top. The base is the latest stable tag (`vX.Y.Z`) unless the owner wants a feature that only a nightly has; then it is that nightly (`vX.Y.Z-nightly.DATE.N`), until a stable release catches up. List the stack with:
+`kaeden/stable` is an upstream release tag on `pingdotgg/t3code` with the fork's commits on top. It takes each new upstream base as a merge, so its history only moves forward and branches cut from it stay valid. The base is the latest stable tag (`vX.Y.Z`) unless the owner wants a feature that only a nightly has; then it is that nightly (`vX.Y.Z-nightly.DATE.N`), until a stable release catches up. List the fork's commits with:
 
 ```sh
-git log --oneline $(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*.*.1[0-9][0-9][0-9][0-9]' --exclude '*-preview.*' kaeden/stable)..kaeden/stable
+git log --oneline --no-merges $(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*.*.1[0-9][0-9][0-9][0-9]' --exclude '*-preview.*' kaeden/stable)..kaeden/stable
 ```
 
-The stack has three parts:
+The fork's commits fall into three parts:
 
 - **jj support.** It is a port of the community jj stack, upstream PRs #20749 to #20756, which upstream closed unmerged for lack of maintainer approval.
   - Colocated jj repos (`.jj` next to `.git`) use jj for checkpoints, diffs, status, workspaces, commit, push, and pull requests.
@@ -32,18 +32,18 @@ The fork also ships its own iOS app through TestFlight; see [Mobile app](#mobile
 
 These trip up agents that follow upstream's habits:
 
-- **Base branch.** Open PRs against `kaeden/stable` on `kaedendev/t3code`. In T3 worktrees that repository is the `origin` remote; the rebase steps below call it `fork`. Never open PRs on `pingdotgg/t3code`.
+- **Base branch.** Open PRs against `kaeden/stable` on `kaedendev/t3code`. In T3 worktrees that repository is the `origin` remote; the update steps below call it `fork`. Never open PRs on `pingdotgg/t3code`.
 - **CI never finishes.** Most jobs run on Blacksmith runners, which the fork doesn't have, so they stay queued forever. "Agent context budget" fails because it measures against upstream `main`. Run `vp run check:changed origin/kaeden/stable` and the affected tests locally instead. Merge with `gh pr merge --squash --admin` and cancel the queued runs. Without the base argument, `check:changed` diffs against upstream and fails with `spawn E2BIG`.
 - **Upstream-only workflows.** The `Mobile EAS *` workflows and `release.yml` are gated on `pingdotgg/t3code` and never run here. EAS builds go to upstream's Expo project and Apple team, so don't use `eas build` or `eas submit` for the fork.
 - **Tools off `PATH`.** Agent shells may not load a login profile. `vp` lives in `~/.vite-plus/bin`. This Mac has no CocoaPods or Homebrew, so run anything that needs `pod`, such as `vp run mobile:install` after a native change, inside `nix shell nixpkgs#cocoapods -c …`.
 
 ## Product name
 
-Release builds call the app Paroxity Code. The source keeps upstream's "T3 Code", so rebases don't touch it; `fork-release.yml` sets `T3CODE_PRODUCT_NAME`, and dev builds and tests keep upstream's name.
+Release builds call the app Paroxity Code. The source keeps upstream's "T3 Code", so upstream merges don't touch it; `fork-release.yml` sets `T3CODE_PRODUCT_NAME`, and dev builds and tests keep upstream's name.
 
 - **Text.** `scripts/lib/product-name.ts` rewrites the name while the web, desktop main and server bundles are built, translation catalogs included. GT finds each translation by a hash of the English source, so the plugin also makes GT's `hashSource` hash the upstream name; without that, every string naming the app would lose its translations. The web and desktop main builds fail if that hook disappears after a GT upgrade.
-- **What keeps "T3 Code".** `KEEP_UPSTREAM_NAME` in the same file lists the strings that must not change: markers that earlier builds wrote to disk, legacy profile names, the Electron app name that keys the Keychain item for saved cookies and secrets, and names other services know (Codex's originator, the peer-link prefix, upstream's GitHub app and Tangled client, the commit author on stacked PRs). The build fails if one of them moves, so check the new spot after a rebase.
-- **Logo.** `T3Wordmark` draws a black hole instead of "T3" when `VITE_FORK_PRODUCT_NAME` is set, and the sidebar and standalone pages show "Paroxity" as text. Every channel's desktop, web and iOS icons come from `assets/paroxity` (the `paroxity` brand in `scripts/lib/brand-assets.ts`). Leave upstream's `assets/nightly` and `assets/prod` untouched so rebases take its artwork changes cleanly.
+- **What keeps "T3 Code".** `KEEP_UPSTREAM_NAME` in the same file lists the strings that must not change: markers that earlier builds wrote to disk, legacy profile names, the Electron app name that keys the Keychain item for saved cookies and secrets, and names other services know (Codex's originator, the peer-link prefix, upstream's GitHub app and Tangled client, the commit author on stacked PRs). The build fails if one of them moves, so check the new spot after an upstream merge.
+- **Logo.** `T3Wordmark` draws a black hole instead of "T3" when `VITE_FORK_PRODUCT_NAME` is set, and the sidebar and standalone pages show "Paroxity" as text. Every channel's desktop, web and iOS icons come from `assets/paroxity` (the `paroxity` brand in `scripts/lib/brand-assets.ts`). Leave upstream's `assets/nightly` and `assets/prod` untouched so upstream merges take its artwork changes cleanly.
 - **App bundle.** Packaging names the bundle `Paroxity Code (Beta).app`, which is what the Dock and menu bar show. Electron's app name comes from the staged `package.json` and `app.setName`, never the bundle, so saved secrets survive the rename. An auto-update keeps the old file name in `/Applications`, so an updated Mac keeps "T3 Code (Beta)" in the Dock until the app is reinstalled from the DMG or renamed.
 - **Not renamed:** the release asset file names, the `t3` command, the Linux desktop files and GNOME extension, and the iOS app.
 
@@ -118,18 +118,18 @@ Do this once per machine. After that, updates come from the fork.
 
   Threads and settings in `~/.t3` carry over.
 
-## Rebase onto a new upstream release
+## Merge a new upstream release
 
-An agent can run these steps unattended. Every gate must pass before anything ships.
+An agent can run these steps unattended. Every gate must pass before anything ships. Never rebase, amend or force-push `kaeden/stable`: contributors branch from it. Fixes found along the way are new commits on the merge branch.
 
 1. Find the target. The newest stable is `gh release view --repo pingdotgg/t3code --json tagName -q .tagName`. For a nightly, take the newest `v*-nightly.*` tag that contains the wanted commits (`git merge-base --is-ancestor <commit> <tag>`). Call it `NEW`.
 2. Find the current base: `OLD=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*.*.1[0-9][0-9][0-9][0-9]' --exclude '*-preview.*' fork/kaeden/stable)`. If `NEW` equals `OLD`, stop.
-3. Create a worktree next to the others. Base a branch `kaeden/stable-$NEW` on `fork/kaeden/stable`, then run `git rebase --onto $NEW $OLD`.
-4. Resolve each conflict so both upstream's change and the fork's intent survive. Never revert upstream work to make a hunk apply. Each commit must typecheck on its own.
+3. Create a worktree next to the others. Base a branch `kaeden/stable-$NEW` on `fork/kaeden/stable`, then run `git merge --no-ff $NEW`.
+4. Resolve each conflict so both upstream's change and the fork's intent survive. Never revert upstream work to make a hunk apply. Upstream code that conflicts with nothing can still break the fork, so the gates below run on the merge result.
 5. Find git calls that upstream added between `OLD` and `NEW` in `apps/server/src`, and route them by VCS kind. Record any you leave for later.
 6. Run the gates. All must pass:
    - `vp run check:changed $NEW`
    - `vp test run apps/server/src/jj apps/server/src/vcs apps/server/src/checkpointing apps/server/src/git apps/server/src/pullRequest packages/source-control-tangled infra/tangled-oauth scripts/fork-release-version.test.ts`
 7. Push `kaeden/stable-$NEW` to `fork`. Run a draft build from that branch with `--ref kaeden/stable-$NEW`.
 8. Report to the owner: the new base, the conflicts and how each was resolved, the gate results, and the draft release.
-9. When the owner approves, force-move `kaeden/stable` to the new branch and publish a build from `kaeden/stable`.
+9. When the owner approves, fast-forward `kaeden/stable` with `git push fork kaeden/stable-$NEW:kaeden/stable` (never `--force`) and publish a build from `kaeden/stable`. If the push is refused because `kaeden/stable` moved, merge `fork/kaeden/stable` into the branch, rerun the gates, and push again.
