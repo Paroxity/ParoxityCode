@@ -12,7 +12,8 @@ import * as ServerConfig from "../config.ts";
 import * as DesktopBrowserChannel from "./DesktopBrowserChannel.ts";
 
 vi.mock("@effect/platform-node/NodeStream", () => ({ fromReadable: vi.fn() }));
-vi.mock("node:net", () => ({
+vi.mock("node:net", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:net")>()),
   Socket: class {
     destroy() {}
   },
