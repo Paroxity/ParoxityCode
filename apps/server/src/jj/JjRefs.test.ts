@@ -8,7 +8,8 @@ import * as JjVcsDriver from "../vcs/JjVcsDriver.ts";
 import { describeJj, runGit, runJj, withJjRepo } from "../vcs/testing/JjTestSupport.ts";
 import { makeJjRefs, type JjRefsOps } from "./JjRefs.ts";
 import { makeJjRemotes } from "./JjRemotes.ts";
-import { makeJjWorkspaces, workspaceNameForRef, type JjWorkspaceOps } from "./JjWorkspaces.ts";
+import { makeJjWorkspaces, type JjWorkspaceOps } from "./JjWorkspaces.ts";
+import { workspaceNameForRef } from "../vcs/JjWorkspaceRef.ts";
 
 interface RefsFixture {
   readonly driver: JjVcsDriver.JjVcsDriverShape;
@@ -28,7 +29,7 @@ const withRepo = <A, E>(
       const { base, driver, fileSystem, path, process, root } = repo;
       const remotes = makeJjRemotes({ driver, process });
       const refs = yield* makeJjRefs({ driver, process });
-      const workspaces = makeJjWorkspaces({
+      const workspaces = yield* makeJjWorkspaces({
         driver,
         process,
         fileSystem,

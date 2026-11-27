@@ -7,7 +7,6 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import {
   GitCommandError,
-  VcsUnsupportedOperationError,
   type VcsStatusInput,
   type VcsError,
   type VcsStatusLocalResult,
@@ -17,8 +16,8 @@ import {
 
 import type * as GitManager from "../git/GitManager.ts";
 import type * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
-import { STATUS_UPSTREAM_REFRESH_ENV } from "../vcs/GitVcsDriverCore.ts";
 import * as JjProcess from "../vcs/JjProcess.ts";
+import { mapJjFailure } from "../vcs/JjProcess.ts";
 import { localBookmarkRevset, remoteBookmarkRevset } from "../vcs/JjRevset.ts";
 import type {
   JjBookmark,
@@ -27,8 +26,13 @@ import type {
   JjWorkspace,
 } from "../vcs/JjVcsDriver.ts";
 import type * as VcsProcess from "../vcs/VcsProcess.ts";
-import { mapJjFailure } from "./JjFailure.ts";
-import { isT3WorkspaceName, workspaceNameForRef } from "./JjWorkspaces.ts";
+import { resolveWorkspaceRefName } from "../vcs/JjWorkspaceRef.ts";
+import {
+  type BookmarkConfigKey,
+  fetchPrivateRemoteRefs,
+  privateRemoteRef,
+  readBookmarkConfig,
+} from "../vcs/JjGitMetadata.ts";
 
 interface RefreshReads {
   readonly segment: Effect.Effect<ReadonlyArray<JjSegmentRow>, VcsError>;
@@ -95,126 +99,18 @@ const EMPTY_LOCAL_STATUS = {
   workingTree: { files: [], insertions: 0, deletions: 0 },
 } as const;
 
-/** Newest-first segment order makes the first eligible bookmarked row the nearest ancestor. */
-export function refNameFromSegment(
-  segment: ReadonlyArray<JjSegmentRow>,
-  excludedManagedWorkspaces?: ReadonlySet<string>,
-): string | null {
-  for (const row of segment) {
-    if (row !== undefined && row.localBookmarks.length > 0) {
-      let selected: string | null = null;
-      for (const bookmark of row.localBookmarks) {
-        if (excludedManagedWorkspaces?.has(workspaceNameForRef(bookmark))) continue;
-        if (selected === null || bookmark < selected) selected = bookmark;
-      }
-      if (selected !== null) return selected;
-    }
-  }
-  return null;
-}
-
-function refNameFromWorkspaceSegment(
-  segment: ReadonlyArray<JjSegmentRow>,
-  workspaceName: string,
-): string | null {
-  if (!isT3WorkspaceName(workspaceName)) {
-    return refNameFromSegment(segment);
-  }
-  // A deleted thread bookmark must not redirect writes onto another bookmark such as main.
-  for (const row of segment) {
-    const bookmark = row.localBookmarks.find((name) => workspaceNameForRef(name) === workspaceName);
-    if (bookmark !== undefined) return bookmark;
-  }
-  return null;
-}
-
-export const resolveWorkspaceRefName = Effect.fn("JjStatus.resolveWorkspaceRefName")(function* (
-  driver: Pick<
-    JjVcsDriverShape,
-    "repoPaths" | "listWorkspaces" | "changeAt" | "listBookmarks" | "countRevset"
-  >,
-  cwd: string,
-  segment: ReadonlyArray<JjSegmentRow>,
-  knownWorkspaces?: ReadonlyArray<JjWorkspace>,
-  knownDescendants?: ReadonlyArray<JjSegmentRow>,
-) {
-  const paths = yield* driver.repoPaths(cwd);
-  const workspaces = knownWorkspaces ?? (yield* driver.listWorkspaces(cwd));
-  const workspace = workspaces.find((entry) => entry.root === paths.workspaceRoot);
-  if (workspace === undefined) return null;
-  if (isT3WorkspaceName(workspace.name)) {
-    return refNameFromWorkspaceSegment(segment, workspace.name);
-  }
-  // Child bookmarks can share the parent's revision without becoming the parent's current ref.
-  const otherManagedWorkspaces = new Set<string>();
-  for (const entry of workspaces) {
-    if (entry.name !== workspace.name && isT3WorkspaceName(entry.name)) {
-      otherManagedWorkspaces.add(entry.name);
-    }
-  }
-  // The combined status read excludes @, so an empty descendant set only avoids the full
-  // eligible-root query when @ itself cannot have ambiguous eligible bookmark names.
-  if (knownDescendants !== undefined && knownDescendants.length === 0) {
-    const currentNames =
-      segment[0]?.localBookmarks.filter(
-        (name) => !otherManagedWorkspaces.has(workspaceNameForRef(name)),
-      ) ?? [];
-    if (currentNames.length <= 1) return refNameFromSegment(segment, otherManagedWorkspaces);
-  }
-  // Select only eligible local names before finding roots; managed workspaces cannot hide a
-  // farther eligible descendant. Multiple roots or names are ambiguous, never a trunk fallback.
-  let eligibleRevset = "bookmarks()";
-  if (otherManagedWorkspaces.size > 0) {
-    const eligible = (yield* driver.listBookmarks(cwd)).filter(
-      (bookmark) =>
-        bookmark.remote === null && !otherManagedWorkspaces.has(workspaceNameForRef(bookmark.name)),
-    );
-    if (eligible.length === 0) return refNameFromSegment(segment, otherManagedWorkspaces);
-    eligibleRevset = eligible.map((bookmark) => localBookmarkRevset(bookmark.name)).join(" | ");
-  }
-  const revset = `roots(@:: & (${eligibleRevset}))`;
-  const count = yield* driver.countRevset(cwd, revset);
-  const descendant = count === 1 ? yield* driver.changeAt(cwd, revset) : null;
-  const names =
-    descendant?.localBookmarks.filter(
-      (name) => !otherManagedWorkspaces.has(workspaceNameForRef(name)),
-    ) ?? [];
-  if (count > 1 || names.length > 1) {
-    return yield* new VcsUnsupportedOperationError({
-      operation: "JjStatus.resolveWorkspaceRefName",
-      kind: "jj",
-      detail: "Ambiguous descendant bookmarks. Switch to the intended bookmark before continuing.",
-    });
-  }
-  if (names.length === 1) return names[0]!;
-  return refNameFromSegment(segment, otherManagedWorkspaces);
-});
-
-/**
- * Work the agent committed but never bookmarked: every row of the segment below `@`. `jj new`
- * would hide it from `listRefs` and from the segment query alike, so switching away and removing
- * a workspace both have to refuse over it.
- */
-export function strandedSegmentRows(
-  segment: ReadonlyArray<JjSegmentRow>,
-): ReadonlyArray<JjSegmentRow> {
-  return segment.slice(0, -1).filter((row) => !row.empty && row.localBookmarks.length === 0);
-}
-
 export const readImportedUpstream = Effect.fn("JjStatus.readImportedUpstream")(function* (
   process: VcsProcess.VcsProcess["Service"],
   paths: { readonly gitDir: string; readonly mainWorkspaceRoot: string },
   refName: string,
 ) {
-  const read = (key: string) =>
-    JjProcess.colocatedGitCommand(
+  const read = (key: BookmarkConfigKey) =>
+    readBookmarkConfig(
       process,
       "JjStatus.readImportedUpstream",
       { gitDir: paths.gitDir, cwd: paths.mainWorkspaceRoot },
-      ["config", "--get", `branch.${refName}.${key}`],
-    ).pipe(
-      Effect.map((result) => result.stdout.trim()),
-      Effect.orElseSucceed(() => ""),
+      refName,
+      key,
     );
   if ((yield* read("t3code-imported-pr-head")) !== "true") return null;
   const [remoteName, merge] = yield* Effect.all([read("remote"), read("merge")]);
@@ -275,7 +171,8 @@ export const resolveUpstreamContext = Effect.fn("JjStatus.resolveUpstreamContext
 /**
  * Whether every commit `remote` reaches and `local` does not is an earlier version, per jj's
  * evolution log, of a change in `local`'s stack: the user's own amend, not someone else's work.
- * Truncated evolog output can only drop versions, so it answers no rather than a wrong yes.
+ * A truncated remote-only list could hide someone else's commit, so it answers no. A truncated
+ * evolog only drops versions, so a match is still sound; a miss is logged rather than silent.
  */
 export const isOwnRewrite = Effect.fn("JjStatus.isOwnRewrite")(function* (
   process: VcsProcess.VcsProcess["Service"],
@@ -316,13 +213,20 @@ export const isOwnRewrite = Effect.fn("JjStatus.isOwnRewrite")(function* (
     ],
     { concurrency: 2 },
   ).pipe(mapJjFailure(operation, cwd, "Could not read the bookmark rewrite history."));
-  const earlier = new Set(versions.stdout.split("\n"));
   const remoteOnly = replaced.stdout.split("\n").filter((line) => line.length > 0);
-  return (
-    !replaced.stdoutTruncated &&
-    remoteOnly.length > 0 &&
-    remoteOnly.every((commitId) => earlier.has(commitId))
-  );
+  if (replaced.stdoutTruncated || remoteOnly.length === 0) return false;
+  const earlier = new Set(versions.stdout.split("\n"));
+  if (remoteOnly.every((commitId) => earlier.has(commitId))) return true;
+  if (versions.stdoutTruncated) {
+    yield* Effect.logWarning(
+      "jj evolog exceeded its output limit; not treating push as a rewrite",
+      {
+        operation,
+        cwd,
+      },
+    );
+  }
+  return false;
 });
 
 export interface JjAheadBehindCounts {
@@ -529,25 +433,12 @@ export const makeJjStatus = Effect.fn("JjStatus.makeJjStatus")(function* (
                 cwd,
                 detail: "The Jujutsu repository has no colocated Git repository.",
               });
-            return yield* JjProcess.colocatedGitCommand(
+            return yield* fetchPrivateRemoteRefs(
               process,
               "JjStatus.refreshUpstream",
               { gitDir: paths.gitDir, cwd },
-              [
-                // Disable configured opportunistic remote-tracking updates as well.
-                "fetch",
-                "--no-tags",
-                "--no-write-fetch-head",
-                "--prune",
-                "--refmap=",
-                "--",
-                remoteName,
-                `+refs/heads/*:refs/t3/remotes/${encodeURIComponent(remoteName)}/*`,
-              ],
-              {
-                env: STATUS_UPSTREAM_REFRESH_ENV,
-                timeoutMs: Duration.toMillis(STATUS_UPSTREAM_REFRESH_TIMEOUT),
-              },
+              remoteName,
+              Duration.toMillis(STATUS_UPSTREAM_REFRESH_TIMEOUT),
             );
           }),
         ),
@@ -683,8 +574,8 @@ export const makeJjStatus = Effect.fn("JjStatus.makeJjStatus")(function* (
       }),
       mapJjFailure("JjStatus.remoteStatus", input.cwd, "This Jujutsu repository cannot be read."),
     );
-    if (usable === null || usable.gitDir === null) return null;
-    const paths = { ...usable, gitDir: usable.gitDir };
+    if (usable === null) return null;
+    const paths = usable;
 
     const reads = knownReads ?? (yield* refreshReads(driver, input.cwd));
     const segment = yield* reads.segment.pipe(
@@ -731,9 +622,7 @@ export const makeJjStatus = Effect.fn("JjStatus.makeJjStatus")(function* (
 
     const upstream = yield* resolveUpstreamContext(driver, input.cwd, refName);
     const remoteRef =
-      primaryRemote === null
-        ? null
-        : `refs/t3/remotes/${encodeURIComponent(primaryRemote)}/${upstreamRefName}`;
+      primaryRemote === null ? null : privateRemoteRef(primaryRemote, upstreamRefName);
     let refreshed =
       remoteRef === null
         ? null

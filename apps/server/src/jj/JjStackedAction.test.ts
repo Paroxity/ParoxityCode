@@ -43,7 +43,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { makeJjRefs } from "./JjRefs.ts";
 import { makeJjRemotes } from "./JjRemotes.ts";
 import { makeJjStackedAction, type JjStackedActionOps } from "./JjStackedAction.ts";
-import { workspaceNameForRef } from "./JjWorkspaces.ts";
+import { workspaceNameForRef } from "../vcs/JjWorkspaceRef.ts";
 
 const decodeThreadProjection = Schema.decodeUnknownEffect(OrchestrationV2ThreadProjection);
 

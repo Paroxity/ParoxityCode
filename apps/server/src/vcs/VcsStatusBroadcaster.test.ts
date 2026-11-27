@@ -123,6 +123,7 @@ function layerTestFor(state: {
     ),
     Layer.provide(
       Layer.mock(GitWorkflowService.GitWorkflowService)({
+        withRefreshScope: (_cwd, effect) => effect,
         localStatus: (_input, options) =>
           Effect.suspend(() => {
             state.localStatusCalls += 1;
@@ -983,6 +984,7 @@ describe("VcsStatusBroadcaster", () => {
         ),
         Layer.provide(
           Layer.mock(GitWorkflowService.GitWorkflowService)({
+            withRefreshScope: (_cwd, effect) => effect,
             localStatus: () => Effect.succeed(localStatus),
             currentBranch: () => Effect.succeed(localStatus.refName),
             readLocalStatusRefSnapshot: () => Effect.succeed("refs"),
@@ -1047,6 +1049,7 @@ describe("VcsStatusBroadcaster", () => {
         ),
         Layer.provide(
           Layer.mock(GitWorkflowService.GitWorkflowService)({
+            withRefreshScope: (_cwd, effect) => effect,
             localStatus: () => Effect.succeed(localStatus),
             currentBranch: () => Effect.succeed(localStatus.refName),
             remoteStatus: () => Effect.succeed(remoteStatus),
@@ -1120,6 +1123,7 @@ describe("VcsStatusBroadcaster", () => {
         ),
         Layer.provide(
           Layer.mock(GitWorkflowService.GitWorkflowService)({
+            withRefreshScope: (_cwd, effect) => effect,
             localStatus: () =>
               Effect.sync(() => {
                 localStatusCalls += 1;
@@ -1223,6 +1227,7 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          withRefreshScope: (_cwd, effect) => effect,
           localStatus: () => Effect.succeed(baseLocalStatus),
           currentBranch: () => Effect.succeed(baseLocalStatus.refName),
           readLocalStatusRefSnapshot: () => Effect.succeed("refs"),
@@ -1271,6 +1276,7 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          withRefreshScope: (_cwd, effect) => effect,
           localStatus: () => Effect.succeed(baseLocalStatus),
           currentBranch: () => Effect.succeed(baseLocalStatus.refName),
           readLocalStatusRefSnapshot: () => Effect.succeed("refs"),
@@ -1322,6 +1328,7 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          withRefreshScope: (_cwd, effect) => effect,
           localStatus: () =>
             Effect.sync(() => {
               state.localStatusCalls += 1;
@@ -1407,6 +1414,7 @@ describe("VcsStatusBroadcaster", () => {
         Layer.provide(layerBackgroundPolicy(() => true)),
         Layer.provide(
           Layer.mock(GitWorkflowService.GitWorkflowService)({
+            withRefreshScope: (_cwd, effect) => effect,
             localStatus: (input) =>
               Effect.sync(() => {
                 seenCwds.push(input.cwd);
@@ -1708,6 +1716,7 @@ describe("VcsStatusBroadcaster", () => {
         Layer.provide(layerBackgroundPolicy(() => true)),
         Layer.provide(
           Layer.mock(GitWorkflowService.GitWorkflowService)({
+            withRefreshScope: (_cwd, effect) => effect,
             localStatus: readLocalStatus,
             invalidateStatus: () =>
               Effect.sync(() => {
@@ -2655,6 +2664,7 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          withRefreshScope: (_cwd, effect) => effect,
           localStatus: () =>
             Effect.sync(() => {
               state.localStatusCalls += 1;

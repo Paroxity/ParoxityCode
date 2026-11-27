@@ -7,7 +7,6 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as JjVcsDriver from "../vcs/JjVcsDriver.ts";
 import * as JjWorkflow from "../jj/JjWorkflow.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
-import * as VcsProjectConfig from "../vcs/VcsProjectConfig.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
@@ -70,7 +69,7 @@ export const layerRealGit = GitWorkflow.layer.pipe(
       ServerSettings.layerTest(),
     ),
   ),
-  Layer.provide(VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer))),
+  Layer.provide(VcsDriverRegistry.layer),
   Layer.provide(Layer.mock(JjWorkflow.JjWorkflow)({})),
   Layer.provide(JjVcsDriver.layer),
   Layer.provideMerge(GitVcsDriver.layer),

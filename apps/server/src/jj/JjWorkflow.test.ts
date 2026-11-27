@@ -34,7 +34,7 @@ import {
 } from "../vcs/testing/JjTestSupport.ts";
 import * as JjWorkflow from "./JjWorkflow.ts";
 import { makeJjRemotes } from "./JjRemotes.ts";
-import { workspaceNameForRef } from "./JjWorkspaces.ts";
+import { workspaceNameForRef } from "../vcs/JjWorkspaceRef.ts";
 
 const projectId = ProjectId.make("workflow-project");
 

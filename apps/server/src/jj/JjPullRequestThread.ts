@@ -25,10 +25,10 @@ import * as JjProcess from "../vcs/JjProcess.ts";
 import { exactStringPattern, localBookmarkRevset } from "../vcs/JjRevset.ts";
 import type { JjVcsDriverShape } from "../vcs/JjVcsDriver.ts";
 import type * as VcsProcess from "../vcs/VcsProcess.ts";
-import { jjFailure, mapJjFailure } from "./JjFailure.ts";
 import type { JjRefsOps } from "./JjRefs.ts";
 import { ensureJjRemote, trackRemoteBookmark, writeBookmarkUpstreamConfig } from "./JjRemotes.ts";
 import type { JjWorkspaceOps } from "./JjWorkspaces.ts";
+import { jjFailure, mapJjFailure } from "../vcs/JjProcess.ts";
 
 const FETCH_TIMEOUT_MS = 120_000;
 

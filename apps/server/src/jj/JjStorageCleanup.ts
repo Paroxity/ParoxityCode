@@ -2,17 +2,15 @@ import type { WorktreeKeepWhen } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
-import * as JjProcess from "../vcs/JjProcess.ts";
 import { STATUS_UPSTREAM_REFRESH_ENV } from "../vcs/GitVcsDriverCore.ts";
+import { fetchPrivateRemoteRefs, privateRemoteRef } from "../vcs/JjGitMetadata.ts";
+import * as JjProcess from "../vcs/JjProcess.ts";
 import * as JjVcsDriver from "../vcs/JjVcsDriver.ts";
+import { resolveWorkspaceRefName, workspaceNameForRef } from "../vcs/JjWorkspaceRef.ts";
+import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
-import { resolveWorkspaceRefName } from "./JjStatus.ts";
-import { workspaceNameForRef, workspacePruneLock } from "./JjWorkspaces.ts";
-
-const cleanupLayer = JjVcsDriver.layer.pipe(Layer.provideMerge(VcsProcess.layer));
 
 class JjStorageCleanupRecoveryError extends Schema.TaggedError<JjStorageCleanupRecoveryError>()(
   "JjStorageCleanupRecoveryError",
@@ -259,32 +257,14 @@ const inspect = Effect.fn("JjStorageCleanup.inspect")(function* (
     if (primaryRemote !== null) {
       // Fetch into private Git refs, never moving or conflicting local jj bookmarks.
       if (refreshDefault) {
-        yield* JjProcess.colocatedGitCommand(
-          process,
-          operation,
-          gitPaths,
-          [
-            "fetch",
-            "--no-tags",
-            "--no-write-fetch-head",
-            "--prune",
-            "--refmap=",
-            "--",
-            primaryRemote,
-            `+refs/heads/*:refs/t3/remotes/${encodeURIComponent(primaryRemote)}/*`,
-          ],
-          { env: STATUS_UPSTREAM_REFRESH_ENV, timeoutMs: 30_000 },
-        );
+        yield* fetchPrivateRemoteRefs(process, operation, gitPaths, primaryRemote, 30_000);
       }
+      const defaultRef = privateRemoteRef(primaryRemote, result.defaultBranch);
       const available = yield* JjProcess.colocatedGitCommand(
         process,
         operation,
         gitPaths,
-        [
-          "rev-parse",
-          "--verify",
-          `refs/t3/remotes/${encodeURIComponent(primaryRemote)}/${result.defaultBranch}^{commit}`,
-        ],
+        ["rev-parse", "--verify", `${defaultRef}^{commit}`],
         { allowNonZeroExit: true },
       );
       if (available.exitCode === 0) {
@@ -292,12 +272,7 @@ const inspect = Effect.fn("JjStorageCleanup.inspect")(function* (
           process,
           operation,
           gitPaths,
-          [
-            "merge-base",
-            "--is-ancestor",
-            parent,
-            `refs/t3/remotes/${encodeURIComponent(primaryRemote)}/${result.defaultBranch}`,
-          ],
+          ["merge-base", "--is-ancestor", parent, defaultRef],
           { allowNonZeroExit: true },
         );
         if (integrated.exitCode !== 0 && integrated.exitCode !== 1) {
@@ -358,7 +333,6 @@ export const inspectJjStorageCleanup = (
           mainWorkspaceRoot: cwd,
         }),
     }),
-    Effect.provide(cleanupLayer),
   );
 
 export const removeJjStorageCleanup = Effect.fn("JjStorageCleanup.remove")(function* (
@@ -367,121 +341,215 @@ export const removeJjStorageCleanup = Effect.fn("JjStorageCleanup.remove")(funct
   expectedCommitId: string,
   keepWhen?: WorktreeKeepWhen,
 ) {
-  return yield* Effect.gen(function* () {
-    const inspected = yield* inspect(cwd, expectedBookmark, keepWhen, false, undefined, false);
-    if (inspected.reason !== null) return inspected.reason;
-    if (inspected.commitId !== expectedCommitId) return "workspace changed since inspection";
-    const process = yield* VcsProcess.VcsProcess;
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const driver = yield* JjVcsDriver.JjVcsDriver;
-    const paths = yield* driver.repoPaths(cwd);
-    const gitDir = paths.gitDir;
-    if (gitDir === null) return "workspace has no colocated Git metadata";
-    const workspaceName = workspaceNameForRef(expectedBookmark);
-    const before = yield* driver.changeAt(paths.mainWorkspaceRoot, `${workspaceName}@`);
-    // App writers are serialized by the lease and live sessions/terminals are excluded.
-    // Rename closes the normal path-based write window; open file descriptors remain
-    // the responsibility of those guards. The unscoped holding directory is never
-    // automatically deleted on failure: failed restoration must preserve user files.
-    return yield* Effect.uninterruptibleMask((restore) =>
-      Effect.gen(function* () {
-        const temporary = yield* fileSystem.makeTempDirectory({
-          directory: path.dirname(paths.workspaceRoot),
-          prefix: ".t3-cleanup-",
-        });
-        const held = path.join(temporary, "workspace");
-        const renamed = yield* fileSystem.rename(paths.workspaceRoot, held).pipe(
-          Effect.as(true),
-          Effect.orElseSucceed(() => false),
-        );
-        if (!renamed) {
-          yield* fileSystem.remove(temporary, { recursive: true });
-          return "workspace is in use or could not be moved for inspection";
-        }
-        let forgotten = false;
-        const result = yield* Effect.exit(
-          restore(
-            Effect.gen(function* () {
-              const after = yield* driver.changeAt(paths.mainWorkspaceRoot, `${workspaceName}@`);
-              if (
-                before === null ||
-                after === null ||
-                !after.empty ||
-                after.description !== "" ||
-                after.conflict ||
-                before.commitId !== after.commitId ||
-                after.parentCommitIds.length !== 1 ||
-                after.parentCommitIds[0] !== expectedCommitId
-              ) {
-                return "workspace changed since inspection";
-              }
-              const reason = yield* inspectDisk(
-                process,
-                { cwd: paths.mainWorkspaceRoot, gitDir, workTree: held },
-                before?.commitId ?? expectedCommitId,
-                keepWhen ?? "uncommitted-changes",
-              );
-              if (reason !== null) return reason;
-              yield* Effect.uninterruptible(
-                Effect.gen(function* () {
-                  yield* JjProcess.jjCommand(
-                    process,
-                    "JjStorageCleanup.remove",
-                    paths.mainWorkspaceRoot,
-                    ["workspace", "forget", workspaceName],
-                    { ignoreWorkingCopy: true, timeoutMs: 300_000 },
-                  );
-                  forgotten = true;
-                }),
-              );
-              yield* JjProcess.colocatedGitCommand(
-                process,
-                "JjStorageCleanup.remove",
-                { cwd: paths.mainWorkspaceRoot, gitDir },
-                ["worktree", "prune", "--expire=now"],
-              );
-              yield* driver.invalidateRepoCaches(paths.mainWorkspaceRoot);
-              yield* fileSystem.remove(temporary, { recursive: true });
-              return null;
-            }),
-          ),
-        );
-        if (!forgotten) {
-          const registered = yield* driver.listWorkspaces(paths.mainWorkspaceRoot).pipe(
-            Effect.map((entries) => entries.some((entry) => entry.name === workspaceName)),
-            Effect.mapError(
-              (error) =>
-                new JjStorageCleanupRecoveryError({
-                  message: `Could not verify workspace registration; recover preserved files from ${held}`,
-                  cause: error,
-                }),
+  const driver = yield* JjVcsDriver.JjVcsDriver;
+  const paths = yield* driver.ensureUsable("JjStorageCleanup.remove", cwd);
+  const gitDir = paths.gitDir;
+  return yield* driver.withWorkspacePruneLock(
+    paths.mainWorkspaceRoot,
+    Effect.gen(function* () {
+      const inspected = yield* inspect(cwd, expectedBookmark, keepWhen, false, undefined, false);
+      if (inspected.reason !== null) return inspected.reason;
+      if (inspected.commitId !== expectedCommitId) return "workspace changed since inspection";
+      const process = yield* VcsProcess.VcsProcess;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspaceName = workspaceNameForRef(expectedBookmark);
+      const before = yield* driver.changeAt(paths.mainWorkspaceRoot, `${workspaceName}@`);
+      // App writers are serialized by the lease and live sessions/terminals are excluded.
+      // Rename closes the normal path-based write window; open file descriptors remain
+      // the responsibility of those guards. The unscoped holding directory is never
+      // automatically deleted on failure: failed restoration must preserve user files.
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const temporary = yield* fileSystem.makeTempDirectory({
+            directory: path.dirname(paths.workspaceRoot),
+            prefix: ".t3-cleanup-",
+          });
+          const held = path.join(temporary, "workspace");
+          const renamed = yield* fileSystem.rename(paths.workspaceRoot, held).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          );
+          if (!renamed) {
+            yield* fileSystem.remove(temporary, { recursive: true });
+            return "workspace is in use or could not be moved for inspection";
+          }
+          let forgotten = false;
+          const result = yield* Effect.exit(
+            restore(
+              Effect.gen(function* () {
+                const after = yield* driver.changeAt(paths.mainWorkspaceRoot, `${workspaceName}@`);
+                if (
+                  before === null ||
+                  after === null ||
+                  !after.empty ||
+                  after.description !== "" ||
+                  after.conflict ||
+                  before.commitId !== after.commitId ||
+                  after.parentCommitIds.length !== 1 ||
+                  after.parentCommitIds[0] !== expectedCommitId
+                ) {
+                  return "workspace changed since inspection";
+                }
+                const reason = yield* inspectDisk(
+                  process,
+                  { cwd: paths.mainWorkspaceRoot, gitDir, workTree: held },
+                  before?.commitId ?? expectedCommitId,
+                  keepWhen ?? "uncommitted-changes",
+                );
+                if (reason !== null) return reason;
+                yield* Effect.uninterruptible(
+                  Effect.gen(function* () {
+                    yield* JjProcess.jjCommand(
+                      process,
+                      "JjStorageCleanup.remove",
+                      paths.mainWorkspaceRoot,
+                      ["workspace", "forget", workspaceName],
+                      { ignoreWorkingCopy: true, timeoutMs: 300_000 },
+                    );
+                    forgotten = true;
+                  }),
+                );
+                yield* JjProcess.colocatedGitCommand(
+                  process,
+                  "JjStorageCleanup.remove",
+                  { cwd: paths.mainWorkspaceRoot, gitDir },
+                  ["worktree", "prune", "--expire=now"],
+                );
+                yield* driver.invalidateRepoCaches(paths.mainWorkspaceRoot);
+                yield* fileSystem.remove(temporary, { recursive: true });
+                return null;
+              }),
             ),
           );
-          if (!registered)
-            return yield* new JjStorageCleanupRecoveryError({
-              message: `Workspace registration changed; recover preserved files from ${held}`,
-            });
-          // Do not overwrite a concurrently recreated path. Leave the holding path intact
-          // if restoration fails, and include its location in the reported error.
-          if (yield* fileSystem.exists(paths.workspaceRoot))
-            return yield* new JjStorageCleanupRecoveryError({
-              message: `Workspace path was recreated; recover preserved files from ${held}`,
-            });
-          yield* fileSystem.rename(held, paths.workspaceRoot).pipe(
-            Effect.mapError(
-              (error) =>
-                new JjStorageCleanupRecoveryError({
-                  message: `Could not restore workspace; recover preserved files from ${held}`,
-                  cause: error,
-                }),
-            ),
-          );
-          yield* fileSystem.remove(temporary, { recursive: true });
-        }
-        if (result._tag === "Failure") return yield* Effect.failCause(result.cause);
-        return result.value;
-      }),
-    );
-  }).pipe(workspacePruneLock.withPermit, Effect.provide(cleanupLayer));
+          if (!forgotten) {
+            const registered = yield* driver.listWorkspaces(paths.mainWorkspaceRoot).pipe(
+              Effect.map((entries) => entries.some((entry) => entry.name === workspaceName)),
+              Effect.mapError(
+                (error) =>
+                  new JjStorageCleanupRecoveryError({
+                    message: `Could not verify workspace registration; recover preserved files from ${held}`,
+                    cause: error,
+                  }),
+              ),
+            );
+            if (!registered)
+              return yield* new JjStorageCleanupRecoveryError({
+                message: `Workspace registration changed; recover preserved files from ${held}`,
+              });
+            // Do not overwrite a concurrently recreated path. Leave the holding path intact
+            // if restoration fails, and include its location in the reported error.
+            if (yield* fileSystem.exists(paths.workspaceRoot))
+              return yield* new JjStorageCleanupRecoveryError({
+                message: `Workspace path was recreated; recover preserved files from ${held}`,
+              });
+            yield* fileSystem.rename(held, paths.workspaceRoot).pipe(
+              Effect.mapError(
+                (error) =>
+                  new JjStorageCleanupRecoveryError({
+                    message: `Could not restore workspace; recover preserved files from ${held}`,
+                    cause: error,
+                  }),
+              ),
+            );
+            yield* fileSystem.remove(temporary, { recursive: true });
+          }
+          if (result._tag === "Failure") return yield* Effect.failCause(result.cause);
+          return result.value;
+        }),
+      );
+    }),
+  );
 });
+
+export type JjCleanupInspection = Effect.Success<ReturnType<typeof inspectJjStorageCleanup>> & {
+  readonly branch: string;
+};
+
+/** Git cleanup cannot prove that changes in a repository jj detection does not select are disposable. */
+export const JJ_METADATA_PRESERVED_REASON =
+  "Jujutsu metadata is present, but this repository does not use Jujutsu";
+
+/**
+ * Storage cleanup's view of jj workspaces, over the server's shared driver, process runner and
+ * detection registry so cache invalidation and process limits reach the live server.
+ */
+export const makeJjStorageCleanup = Effect.gen(function* () {
+  const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
+  const services = yield* Effect.context<
+    JjVcsDriver.JjVcsDriver | VcsProcess.VcsProcess | FileSystem.FileSystem | Path.Path
+  >();
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+
+  const selectsJj = (cwd: string) =>
+    registry.detect({ cwd, jjOnly: true }).pipe(Effect.map((handle) => handle?.kind === "jj"));
+
+  /** `"preserved"`: a `.jj` that detection does not select, which Git cleanup must not touch. */
+  const classify = Effect.fn("JjStorageCleanup.classify")(function* (worktreePath: string) {
+    if (!(yield* fileSystem.exists(path.join(worktreePath, ".jj")))) return null;
+    return (yield* selectsJj(worktreePath)) ? ("jj" as const) : ("preserved" as const);
+  });
+
+  /** One sweep's remote-default lookups and fetches, shared across its workspaces. */
+  const startSweep = () => {
+    const defaultBranches = new Map<string, string | null>();
+    const refreshedRepositories = new Set<string>();
+    const run = (
+      worktreePath: string,
+      branch: string,
+      keepWhen: WorktreeKeepWhen,
+      refreshDefault: boolean,
+      inspectDefault: boolean,
+    ) =>
+      inspectJjStorageCleanup(
+        worktreePath,
+        branch,
+        keepWhen,
+        refreshDefault,
+        defaultBranches,
+        inspectDefault,
+      ).pipe(
+        Effect.map((inspection): JjCleanupInspection => ({ ...inspection, branch })),
+        Effect.provide(services),
+      );
+    return {
+      /** Safety checks; the default-branch comparison only when age alone cannot remove it. */
+      inspect: (
+        worktreePath: string,
+        branch: string,
+        keepWhen: WorktreeKeepWhen,
+        inspectDefault: boolean,
+      ) => run(worktreePath, branch, keepWhen, false, inspectDefault),
+      /** Refetches each repository's default branch once per sweep before comparing with it. */
+      refreshDefault: Effect.fn("JjStorageCleanup.refreshDefault")(function* (
+        worktreePath: string,
+        inspection: JjCleanupInspection,
+        keepWhen: WorktreeKeepWhen,
+      ) {
+        const unavailable = "default branch is unavailable";
+        if (inspection.defaultBranch === null) return { ...inspection, reason: unavailable };
+        if (refreshedRepositories.has(inspection.mainWorkspaceRoot)) return inspection;
+        const refreshed = yield* run(worktreePath, inspection.branch, keepWhen, true, true);
+        if (refreshed.reason !== null) return refreshed;
+        if (refreshed.commitId !== inspection.commitId)
+          return { ...refreshed, reason: "commit changed since check" };
+        refreshedRepositories.add(inspection.mainWorkspaceRoot);
+        return refreshed.defaultBranch === null ? { ...refreshed, reason: unavailable } : refreshed;
+      }),
+    };
+  };
+
+  const remove = (
+    worktreePath: string,
+    inspection: JjCleanupInspection,
+    keepWhen: WorktreeKeepWhen,
+  ) =>
+    removeJjStorageCleanup(worktreePath, inspection.branch, inspection.commitId, keepWhen).pipe(
+      Effect.provide(services),
+    );
+
+  return { selectsJj, classify, startSweep, remove };
+});
+
+export type JjStorageCleanup = Effect.Success<typeof makeJjStorageCleanup>;

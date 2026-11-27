@@ -112,7 +112,7 @@ const withRepo = <A, E>(
       const forkPath = path.join(base, "fork.git");
       const remotes = makeJjRemotes({ driver, process });
       const refs = yield* makeJjRefs({ driver, process });
-      const workspaces = makeJjWorkspaces({
+      const workspaces = yield* makeJjWorkspaces({
         driver,
         process,
         fileSystem,

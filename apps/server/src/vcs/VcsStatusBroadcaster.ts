@@ -37,7 +37,6 @@ import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { withStatusRefreshReads as scopeStatusRefreshReads } from "../jj/JjStatus.ts";
 import type * as GitVcsDriver from "./GitVcsDriver.ts";
 import { VcsAutomaticFetchInterval } from "./VcsAutomaticFetchInterval.ts";
 import * as VcsDriverRegistry from "./VcsDriverRegistry.ts";
@@ -276,14 +275,10 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-  const withStatusRefreshReads =
+  const withRefreshScope =
     (cwd: string) =>
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      detectStatusRepository(cwd).pipe(
-        Effect.flatMap((handle) =>
-          handle?.kind === "jj" ? scopeStatusRefreshReads(effect) : effect,
-        ),
-      );
+      workflow.withRefreshScope(cwd, effect);
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -582,7 +577,7 @@ export const make = Effect.gen(function* () {
           return mergeGitStatusParts(parts.local, parts.remote);
         }),
       );
-    }).pipe(withStatusRefreshReads(cwd));
+    }).pipe(withRefreshScope(cwd));
   }, Effect.scoped);
 
   const refreshLocalStatusCore = Effect.fn("VcsStatusBroadcaster.refreshLocalStatusCore")(
@@ -768,7 +763,7 @@ export const make = Effect.gen(function* () {
           }
         }
         return yield* updateCachedRemoteStatus(cwd, remoteRead, { publish: true });
-      }).pipe(withStatusRefreshReads(cwd)),
+      }).pipe(withRefreshScope(cwd)),
     );
   });
 
@@ -832,7 +827,7 @@ export const make = Effect.gen(function* () {
         status,
         refs === null ? null : yield* workflow.readRefSnapshot(cwd, refs),
       );
-    }).pipe(withStatusRefreshReads(cwd));
+    }).pipe(withRefreshScope(cwd));
   }, Effect.scoped);
 
   const refreshAfterCheckout: VcsStatusBroadcaster["Service"]["refreshAfterCheckout"] = Effect.fn(
@@ -844,7 +839,7 @@ export const make = Effect.gen(function* () {
     yield* refreshLocalStatusCore(cwd).pipe(
       Effect.ensuring(Deferred.succeed(localDone, undefined)),
       Effect.andThen(refreshRemoteAndLocalTotals(cwd, rawCwd, null)),
-      withStatusRefreshReads(cwd),
+      withRefreshScope(cwd),
       Effect.ignoreCause({ log: true }),
       Effect.forkIn(broadcasterScope),
     );

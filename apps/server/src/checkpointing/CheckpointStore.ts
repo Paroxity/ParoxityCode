@@ -140,9 +140,7 @@ export const make = Effect.gen(function* () {
   )(function* (cwd: string) {
     const jj = yield* vcsRegistry.detect({ cwd, jjOnly: true });
     if (jj?.kind !== "jj") return yield* isGitRepository(cwd);
-    if (!jj.driver.checkpoints) return false;
-    const usable = jj.driver.checkpointsUsable;
-    return usable ? yield* usable(cwd) : true;
+    return yield* jj.driver.checkpointsUsable?.(cwd) ?? Effect.succeed(true);
   });
 
   const captureCheckpoint: CheckpointStore["Service"]["captureCheckpoint"] = Effect.fn(

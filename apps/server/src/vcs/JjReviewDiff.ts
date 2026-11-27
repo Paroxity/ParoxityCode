@@ -15,7 +15,6 @@ import {
   VcsProcessOutputReadError,
   VcsUnsupportedOperationError,
 } from "@t3tools/contracts";
-import { resolveWorkspaceRefName } from "../jj/JjStatus.ts";
 import { parseReviewNumstat, PATCH_RENDER_PREFIX_ARGS } from "./GitVcsDriverCore.ts";
 import { EMPTY_TREE_OID, JJ_CONFLICT_PATHSPECS } from "./JjCheckpoints.ts";
 import { colocatedGitCommand, jjCommand } from "./JjProcess.ts";
@@ -29,6 +28,8 @@ import {
 } from "./JjRevset.ts";
 import type * as VcsDriver from "./VcsDriver.ts";
 import type * as VcsProcess from "./VcsProcess.ts";
+import { resolveWorkspaceRefName } from "./JjWorkspaceRef.ts";
+import { bookmarkConfigKey } from "./JjGitMetadata.ts";
 
 export interface JjReviewDiffDeps {
   readonly process: VcsProcess.VcsProcess["Service"];
@@ -307,8 +308,8 @@ export const makeJjReviewDiff = (deps: JjReviewDiffDeps): JjReviewDiffOps => {
           const separator = line.indexOf(" ");
           const key = line.slice(0, separator);
           const value = line.slice(separator + 1).trim();
-          if (key === `branch.${bookmark}.t3-merge-base-ref`) fullRef = value;
-          else if (key === `branch.${bookmark}.gh-merge-base`) legacyBase = value;
+          if (key === bookmarkConfigKey(bookmark, "t3-merge-base-ref")) fullRef = value;
+          else if (key === bookmarkConfigKey(bookmark, "gh-merge-base")) legacyBase = value;
         }
       }
       if (fullRef.startsWith("refs/heads/") || fullRef.startsWith("refs/remotes/")) {
