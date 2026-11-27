@@ -6,7 +6,7 @@
 
 <h1 align="center">Paroxity Code</h1>
 
-<p align="center">An unofficial fork of T3 Code with Jujutsu (jj) and Tangled support.</p>
+<p align="center">An unofficial fork of T3 Code.</p>
 
 <p align="center">
   <a href="https://github.com/Paroxity/ParoxityCode/releases"><strong>Releases</strong></a> ·

@@ -388,7 +388,7 @@ jobs:
           fi
 
           cat > notes.md <<EOF
-          Paroxity Code, an unofficial fork of T3 Code with Jujutsu support, built on upstream [$BASE](https://github.com/pingdotgg/t3code/releases/tag/$BASE) from \`$REF\`.
+          Paroxity Code, an unofficial fork of T3 Code, built on upstream [$BASE](https://github.com/pingdotgg/t3code/releases/tag/$BASE) from \`$REF\`.
           EOF
           # Drafts are invisible to updaters, so assets upload before anything can be offered.
           gh release create "$TAG" --draft --target "$REF" --title "Paroxity Code v$VERSION" --notes-file notes.md "${files[@]}"
