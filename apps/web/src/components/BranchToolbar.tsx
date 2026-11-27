@@ -226,11 +226,11 @@ const RunContextSelector = memo(function RunContextSelector({
         ? FolderGitIcon
         : FolderIcon;
   const workspaceLabel = forceNewWorktree
-    ? resolveEnvModeLabel("worktree", terminology, m)
+    ? resolveEnvModeLabel("worktree", m, terminology)
     : envModeLocked
       ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode, terminology, m)
       : effectiveEnvMode === "worktree"
-        ? resolveEnvModeLabel("worktree", terminology, m)
+        ? resolveEnvModeLabel("worktree", m, terminology)
         : resolveCurrentWorkspaceLabel(activeWorktreePath, terminology, m);
   const isPanel = displayMode === "panel";
   const workspaceModesLocked = envModeLocked || !offersWorkspaceModes;
@@ -480,7 +480,7 @@ const RunContextSelector = memo(function RunContextSelector({
                 <span className="flex min-w-0 items-center gap-1.5">
                   <FolderGit2Icon className="size-3" />
                   <span className="min-w-0 truncate">
-                    {resolveEnvModeLabel("worktree", terminology, m)}
+                    {resolveEnvModeLabel("worktree", m, terminology)}
                   </span>
                 </span>
               </MenuRadioItem>

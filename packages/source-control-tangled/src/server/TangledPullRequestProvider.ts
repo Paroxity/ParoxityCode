@@ -22,8 +22,7 @@ import * as Option from "effect/Option";
 
 import { definition, parseTangledRepository, TANGLED_WEB_HOST } from "../shared/definition.ts";
 import * as TangledApi from "./TangledApi.ts";
-import { TangledAuth, type TangledAuthError } from "./TangledAuth.ts";
-import { pullRequestUrl, ticketNumber } from "./TangledSourceControlProvider.ts";
+import { TangledAuth } from "./TangledAuth.ts";
 import * as TangledPatch from "./tangledPatch.ts";
 import * as TangledRound from "./tangledRound.ts";
 
@@ -56,10 +55,9 @@ const UNAVAILABLE_REQUIREMENT = {
 const PAGE_SIZE = 100;
 const COMMIT_LIMIT = 100;
 
-type ApiError = TangledApi.TangledApiError | TangledAuthError;
 type PullRef = ProviderRepositoryRef & { readonly number: number };
 
-function tangledProviderFailure(error: ApiError): PullRequestProviderFailure {
+function tangledProviderFailure(error: TangledApi.TangledError): PullRequestProviderFailure {
   if (error._tag === "TangledAuthError")
     return { reason: error.reason === "failed" ? "failed" : "unauthenticated" };
   return {
@@ -80,8 +78,6 @@ const latestOf = (always: string, ...values: ReadonlyArray<string | null | undef
     .flatMap((value) => (value ? [iso(value)] : []))
     .toSorted()
     .at(-1) ?? iso(always);
-
-const pullState = (state: TangledApi.TicketState) => (state === "completed" ? "merged" : state);
 
 const WORKFLOW_STATUS: Record<string, PullRequestCheckStatus> = {
   pending: "pending",
@@ -154,7 +150,7 @@ export const make = Effect.gen(function* () {
     detail: string,
     reason: PullRequestProviderFailure["reason"] = "failed",
   ) => new PullRequestProviderError({ provider: KIND, operation, reason, detail });
-  const fail = (operation: string) => (cause: ApiError) =>
+  const fail = (operation: string) => (cause: TangledApi.TangledError) =>
     new PullRequestProviderError({
       provider: KIND,
       operation,
@@ -222,11 +218,11 @@ export const make = Effect.gen(function* () {
   ): ProviderChangeRequest => ({
     number,
     title: ticket.title.trim() || `Pull request ${number}`,
-    url: pullRequestUrl(repository, number),
+    url: TangledApi.pullRequestUrl(repository, number),
     author,
     headBranch: round.sourceBranch ?? round.headOid,
     baseBranch: ticket.targetBranch,
-    state: pullState(ticket.state),
+    state: TangledApi.pullState(ticket.state),
     isDraft: false,
     mergeability: "unknown",
     additions: 0,
@@ -375,6 +371,7 @@ export const make = Effect.gen(function* () {
       ),
       Effect.mapError(fail(operation)),
     );
+    yield* api.forgetReads(TangledApi.ticketUri(repository.repoDid, rkey));
   });
 
   /** Whether the target already holds the round, as itself or as rebased copies of its commits. */
@@ -454,7 +451,7 @@ export const make = Effect.gen(function* () {
                 : fail(operation)(cause),
           ),
         );
-      yield* api.forgetRounds(ticket.uri);
+      yield* api.forgetReads(ticket.uri);
       const latest = yield* api.listRounds(ticket.uri).pipe(Effect.mapError(fail(operation)));
       if (latest.at(-1)?.cid !== round.cid)
         return yield* failure(
@@ -522,7 +519,7 @@ export const make = Effect.gen(function* () {
           })
           .pipe(Effect.mapError(fail(operation)));
         const rows = page.items.flatMap((ticket) => {
-          const number = ticketNumber(ticket.rkey);
+          const number = TangledApi.ticketNumber(ticket.rkey);
           // Bobbin ignores its author filter, so authorship is narrowed here.
           return number === null ||
             ticket.targetBranch.length === 0 ||
@@ -555,7 +552,7 @@ export const make = Effect.gen(function* () {
     getChangeRequest: Effect.fn("TangledPullRequestProvider.getChangeRequest")(function* (input) {
       const operation = "getChangeRequest";
       const { repository, ticket, round } = yield* loadPull(operation, input);
-      const [author, checks, files, permissions, mergeability, comments] = yield* Effect.all(
+      const [author, checks, files, permissions, mergeability, commentedAt] = yield* Effect.all(
         [
           actor(ticket.authorDid),
           checksFor(repository, round).pipe(Effect.orElseSucceed(() => [])),
@@ -594,8 +591,8 @@ export const make = Effect.gen(function* () {
                   Effect.orElseSucceed(() => "unknown" as const),
                 ),
           // A ticket's record never moves for a comment, yet clients reread activity only when
-          // `updatedAt` does.
-          api.listComments(ticket.uri).pipe(Effect.orElseSucceed(() => [])),
+          // `updatedAt` does. Tangled lists comments newest first, so one page of one finds it.
+          api.latestCommentAt(ticket.uri).pipe(Effect.orElseSucceed(() => null)),
         ],
         { concurrency: "unbounded" },
       );
@@ -603,7 +600,7 @@ export const make = Effect.gen(function* () {
       const summary = toChangeRequest(repository, ticket, round, author, input.number);
       return {
         ...summary,
-        updatedAt: latestOf(summary.updatedAt, ...comments.map((comment) => comment.createdAt)),
+        updatedAt: latestOf(summary.updatedAt, commentedAt),
         mergeability,
         additions: stats.reduce((sum, file) => sum + file.additions, 0),
         deletions: stats.reduce((sum, file) => sum + file.deletions, 0),
@@ -625,7 +622,7 @@ export const make = Effect.gen(function* () {
         const operation = "getChangeRequestChecks";
         const { repository, ticket, round } = yield* loadPull(operation, input);
         const checks = yield* checksFor(repository, round).pipe(Effect.mapError(fail(operation)));
-        return { state: pullState(ticket.state), checks };
+        return { state: TangledApi.pullState(ticket.state), checks };
       },
     ),
 
@@ -635,8 +632,8 @@ export const make = Effect.gen(function* () {
         const repository =
           reference === null ? null : Option.getOrNull(yield* api.cachedRepository(reference));
         // Unheld, the repository's rounds may still be: its entry can expire before theirs.
-        if (scope === undefined || repository === null) return yield* api.forgetRounds();
-        yield* api.forgetRounds(
+        if (scope === undefined || repository === null) return yield* api.forgetReads();
+        yield* api.forgetReads(
           scope.number === undefined
             ? `at://${repository.repoDid}`
             : TangledApi.ticketUri(repository.repoDid, String(scope.number)),
@@ -664,7 +661,7 @@ export const make = Effect.gen(function* () {
           ],
           { concurrency: 3 },
         ).pipe(Effect.mapError(fail(operation)));
-        const url = pullRequestUrl(repository, input.number);
+        const url = TangledApi.pullRequestUrl(repository, input.number);
         const commenters = yield* Effect.forEach(comments, (comment) => actor(comment.authorDid), {
           concurrency: 8,
         });

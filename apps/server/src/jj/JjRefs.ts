@@ -19,10 +19,19 @@ import {
 } from "../vcs/JjRevset.ts";
 import type { JjBookmark, JjVcsDriverShape, JjWorkspace } from "../vcs/JjVcsDriver.ts";
 import type * as VcsProcess from "../vcs/VcsProcess.ts";
-import { jjFailure, mapJjFailure } from "./JjFailure.ts";
 import { assertBookmarkUsable, trackRemoteBookmark } from "./JjRemotes.ts";
-import { resolveWorkspaceRefName, strandedSegmentRows } from "./JjStatus.ts";
-import { workspaceNameForRef } from "./JjWorkspaces.ts";
+import {
+  resolveWorkspaceRefName,
+  strandedSegmentRows,
+  workspaceNameForRef,
+} from "../vcs/JjWorkspaceRef.ts";
+import { jjFailure, mapJjFailure } from "../vcs/JjProcess.ts";
+import {
+  BOOKMARK_LINEAGE_KEYS,
+  readBookmarkConfig,
+  unsetBookmarkConfig,
+  writeBookmarkConfig,
+} from "../vcs/JjGitMetadata.ts";
 
 const LIST_REFS_SNAPSHOT_CACHE_CAPACITY = 64;
 const LIST_REFS_SNAPSHOT_CACHE_TTL = Duration.minutes(2);
@@ -453,35 +462,21 @@ export const makeJjRefs = Effect.fn("JjRefs.makeJjRefs")(function* (
 const moveBookmarkGitConfig = Effect.fn("JjRefs.moveBookmarkGitConfig")(function* (
   process: VcsProcess.VcsProcess["Service"],
   input: {
-    readonly gitDir: string | null;
+    readonly gitDir: string;
     readonly cwd: string;
     readonly oldName: string;
     readonly newName: string;
   },
 ): Effect.fn.Return<void, never> {
-  const gitDir = input.gitDir;
-  if (gitDir === null) {
-    return;
-  }
-  const git = (args: ReadonlyArray<string>) =>
-    JjProcess.colocatedGitCommand(
-      process,
-      "JjRefs.moveBookmarkGitConfig",
-      { gitDir, cwd: input.cwd },
-      args,
-      { allowNonZeroExit: true, timeoutMs: 10_000 },
-    );
-
-  for (const key of ["remote", "merge", "gh-merge-base", "t3-merge-base-ref"] as const) {
-    const existing = yield* git(["config", "--get", `branch.${input.oldName}.${key}`]).pipe(
-      Effect.map((result) => (result.exitCode === 0 ? result.stdout.trim() : "")),
-      Effect.orElseSucceed(() => ""),
-    );
+  const operation = "JjRefs.moveBookmarkGitConfig";
+  const paths = { gitDir: input.gitDir, cwd: input.cwd };
+  for (const key of BOOKMARK_LINEAGE_KEYS) {
+    const existing = yield* readBookmarkConfig(process, operation, paths, input.oldName, key);
     if (existing.length === 0) {
       continue;
     }
     const value = key === "merge" ? `refs/heads/${input.newName}` : existing;
-    yield* git(["config", `branch.${input.newName}.${key}`, value]).pipe(Effect.ignore);
-    yield* git(["config", "--unset", `branch.${input.oldName}.${key}`]).pipe(Effect.ignore);
+    yield* writeBookmarkConfig(process, operation, paths, input.newName, key, value);
+    yield* unsetBookmarkConfig(process, operation, paths, input.oldName, key);
   }
 });

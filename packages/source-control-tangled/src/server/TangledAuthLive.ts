@@ -1,14 +1,3 @@
-import { Key, type Jwk } from "@atproto/jwk";
-import {
-  NodeOAuthClient,
-  type NodeSavedSession,
-  type NodeSavedSessionStore,
-  type NodeSavedState,
-  requestLocalLock,
-  TokenInvalidError,
-  TokenRefreshError,
-  TokenRevokedError,
-} from "@atproto/oauth-client-node";
 import {
   SourceControlProviderKind,
   SourceControlSignInError,
@@ -23,6 +12,7 @@ import {
 } from "@t3tools/source-control-core/shared/definition";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
+import * as Config from "effect/Config";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -33,12 +23,19 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
+import { isDid } from "../shared/definition.ts";
+import { PublicHostGuard } from "./publicHost.ts";
+import { BOBBIN, MiniDoc, NSID } from "./TangledApi.ts";
 import { TangledAuth, TangledAuthError, type TangledViewer } from "./TangledAuth.ts";
+import * as TangledOAuth from "./TangledOAuth.ts";
 
-/** The relay in `infra/tangled-oauth`: client metadata, assertion signing and the callback. */
-const RELAY_ORIGIN = "https://t3-oauth.kaeden.codes";
+/** The relay in `infra/tangled-oauth`: client metadata and the callback the server polls for. */
+const DEFAULT_RELAY_ORIGIN = "https://t3-oauth.kaeden.codes";
+/** Points the server at another relay, as one deployed to test the relay itself. */
+const RELAY_ORIGIN_ENV = "T3CODE_TANGLED_OAUTH_RELAY_URL";
 
 const KIND = SourceControlProviderKind.make("tangled");
 const HOST = "tangled.org";
@@ -47,214 +44,16 @@ const SIGN_IN_LIFETIME = Duration.minutes(10);
 const POLL_INTERVAL = Duration.seconds(2);
 const REQUEST_TIMEOUT = Duration.seconds(15);
 const HANDLE_TTL = Duration.hours(1);
-
-/** What the sign-in needs of `NodeOAuthClient`, so tests can stand in for the PDS. */
-export interface TangledOAuthClient {
-  /** The PDS authorize URL, and the `state` the relay files the callback under. */
-  readonly authorize: (
-    account: string,
-  ) => Promise<{ readonly url: string; readonly state: string }>;
-  /** Exchanges the relay's callback for a session the client saves, and names its DID. */
-  readonly callback: (params: URLSearchParams) => Promise<{ readonly did: string }>;
-  /** A request to the PDS of the saved session for `did`, refreshing its tokens as needed. */
-  readonly fetch: (did: string, path: string, init?: RequestInit) => Promise<Response>;
-  /** The handle `did` claims and resolves back to it, or null when it does not. */
-  readonly handle: (did: string) => Promise<string | null>;
-}
+/** Refreshes this long before the access token lapses, so a call does not race its expiry. */
+const REFRESH_MARGIN = Duration.toMillis(Duration.minutes(1));
 
 const SignInSettings = Schema.Struct(appSignInSettingsFields);
-
-const UnknownJson = Schema.fromJsonString(Schema.Unknown);
-const decodeJson = Schema.decodeUnknownOption(UnknownJson);
-const encodeJson = Schema.encodeSync(UnknownJson);
-// The library writes the session; `tokenSet.sub` is the one field read without its help.
-const isSavedSession = Schema.is(
-  Schema.Struct({ tokenSet: Schema.Struct({ sub: Schema.String }) }),
-);
-const decodeSavedSession = (raw: string) =>
-  Option.filter(decodeJson(raw), isSavedSession) as Option.Option<NodeSavedSession>;
-
-const readSavedSession = (
-  sourceControlHost: SourceControlHost.SourceControlHost["Service"],
-): Effect.Effect<{
-  readonly signIns: Readonly<Record<string, string>>;
-  readonly session: Option.Option<NodeSavedSession>;
-}> =>
-  sourceControlHost.settings.get.pipe(
-    Effect.map((settings) => {
-      const { signIns } = readSourceControlHostSettings(
-        SignInSettings,
-        settings.sourceControlHosts[KIND],
-      );
-      return { signIns, session: decodeSavedSession(signIns[HOST] ?? "") };
-    }),
-    Effect.orElseSucceed(() => ({ signIns: {}, session: Option.none<NodeSavedSession>() })),
-  );
-
-/**
- * The library's session store over the `signIns` secret setting. Only a sign-in stores a new
- * account; a refresh rewrites the session only while it is still the stored one, so a sign-out
- * during the refresh holds.
- * @public
- */
-export const makeSessionStore = (
-  sourceControlHost: SourceControlHost.SourceControlHost["Service"],
-  isSigningIn: () => boolean,
-) => {
-  const write = (session: NodeSavedSession | null, when: (current: string | null) => boolean) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { signIns, session: current } = yield* readSavedSession(sourceControlHost);
-        if (!when(Option.getOrNull(current)?.tokenSet.sub ?? null)) return;
-        const next = { ...signIns };
-        if (session === null) delete next[HOST];
-        else next[HOST] = encodeJson(session);
-        yield* sourceControlHost.settings.update({
-          sourceControlHosts: { [KIND]: { signIns: next } },
-        });
-      }),
-    );
-  return {
-    get: (did: string) =>
-      Effect.runPromise(
-        readSavedSession(sourceControlHost).pipe(
-          Effect.map(({ session }) =>
-            Option.getOrUndefined(Option.filter(session, (saved) => saved.tokenSet.sub === did)),
-          ),
-        ),
-      ),
-    set: (did: string, session: NodeSavedSession) =>
-      write(session, (current) => current === did || isSigningIn()),
-    del: (did: string) => write(null, (current) => current === did),
-  } satisfies NodeSavedSessionStore;
-};
-
-const RelayJwks = Schema.Struct({
-  keys: Schema.NonEmptyArray(Schema.Record(Schema.String, Schema.Unknown)),
-});
-
-/**
- * The client's signing key, whose private half only the relay holds. The relay's JWK carries no
- * `use`, which `Key` rejects for a signing key, and `Key` reads `isPrivate` from a `d` it lacks.
- */
-class RelayKey extends Key {
-  readonly #sign: (claims: unknown) => Promise<string>;
-
-  constructor(jwk: Readonly<Record<string, unknown>>, sign: (claims: unknown) => Promise<string>) {
-    const { use: _use, ...rest } = jwk;
-    super(rest as Jwk);
-    Object.defineProperty(this, "isPrivate", { value: true });
-    this.#sign = sign;
-  }
-
-  override createJwt(_header: unknown, payload: unknown) {
-    return this.#sign(payload) as ReturnType<Key["createJwt"]>;
-  }
-
-  override verifyJwt(): never {
-    throw new Error("The relay key only signs client assertions.");
-  }
-}
-
-const relayFailure = (cause: unknown) =>
-  new TangledAuthError({
-    reason: "failed",
-    detail: "The server could not reach the Tangled sign-in relay.",
-    cause,
-  });
-
-/** `NodeOAuthClient` configured from the relay, its sessions in the `signIns` setting. */
-const makeNodeClient = Effect.gen(function* () {
-  const sourceControlHost = yield* SourceControlHost.SourceControlHost;
-  const httpClient = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk);
-  const relayJson = <S extends Schema.Top>(
-    request: HttpClientRequest.HttpClientRequest,
-    schema: S,
-  ) =>
-    httpClient
-      .execute(request)
-      .pipe(
-        Effect.flatMap(HttpClientResponse.schemaBodyJson(schema)),
-        Effect.timeout(REQUEST_TIMEOUT),
-      );
-  const [metadata, jwks] = yield* Effect.all(
-    [
-      relayJson(
-        HttpClientRequest.get(`${RELAY_ORIGIN}/tangled/client-metadata.json`),
-        Schema.Record(Schema.String, Schema.Unknown),
-      ),
-      relayJson(HttpClientRequest.get(`${RELAY_ORIGIN}/tangled/jwks.json`), RelayJwks),
-    ],
-    { concurrency: "unbounded" },
-  ).pipe(Effect.mapError(relayFailure));
-  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-  const sign = (claims: unknown) =>
-    runPromise(
-      relayJson(
-        HttpClientRequest.post(`${RELAY_ORIGIN}/tangled/assertion`).pipe(
-          HttpClientRequest.bodyJsonUnsafe(claims),
-        ),
-        Schema.Struct({ assertion: Schema.String }),
-      ).pipe(Effect.map(({ assertion }) => assertion)),
-    );
-
-  // A sign-in lives minutes, so pending state is kept in memory.
-  const states = new Map<string, NodeSavedState>();
-  // The library files each sign-in under a `state` it makes up; its `appState` finds it again.
-  const stateByAttempt = new Map<string, string>();
-  let signingIn = 0;
-  let attempts = 0;
-
-  const client = new NodeOAuthClient({
-    clientMetadata: metadata as unknown as ConstructorParameters<
-      typeof NodeOAuthClient
-    >[0]["clientMetadata"],
-    keyset: [new RelayKey(jwks.keys[0], sign)],
-    requestLock: requestLocalLock,
-    stateStore: {
-      set: async (state, data) => {
-        states.set(state, data);
-        if (data.appState !== undefined) stateByAttempt.set(data.appState, state);
-      },
-      get: async (state) => states.get(state),
-      del: async (state) => {
-        states.delete(state);
-      },
-    },
-    sessionStore: makeSessionStore(sourceControlHost, () => signingIn > 0),
-  });
-  const scope = typeof metadata.scope === "string" ? metadata.scope : undefined;
-
-  return {
-    authorize: async (account) => {
-      const attempt = String((attempts += 1));
-      const url = await client.authorize(account, { state: attempt, ...(scope && { scope }) });
-      const state = stateByAttempt.get(attempt);
-      stateByAttempt.delete(attempt);
-      if (state === undefined) throw new Error("The OAuth client did not record its state.");
-      return { url: url.toString(), state };
-    },
-    callback: async (params) => {
-      signingIn += 1;
-      try {
-        const { session } = await client.callback(params);
-        return { did: session.did };
-      } finally {
-        signingIn -= 1;
-      }
-    },
-    fetch: async (did, path, init) => (await client.restore(did)).fetchHandler(path, init),
-    handle: async (did) => {
-      const { handle } = await client.identityResolver.resolve(did);
-      return handle === "handle.invalid" ? null : handle;
-    },
-  } satisfies TangledOAuthClient;
-});
-
-interface PendingSignIn {
-  readonly deferred: Deferred.Deferred<{ readonly account: string }, SourceControlSignInError>;
-  readonly fiber: Fiber.Fiber<unknown, unknown>;
-}
+const SessionJson = Schema.fromJsonString(TangledOAuth.Session);
+// A session `@atproto/oauth-client-node` saved is bound to the old confidential client, so it
+// reads as no session and the viewer signs in again.
+const decodeSession = Schema.decodeUnknownOption(SessionJson);
+const encodeSession = Schema.encodeSync(SessionJson);
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const signInError = (
   host: string,
@@ -270,39 +69,95 @@ const signInError = (
     ...(cause === undefined ? {} : { cause }),
   });
 
-const errorMessage = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
-
-const isExpiredSession = (cause: unknown) =>
-  cause instanceof TokenRefreshError ||
-  cause instanceof TokenRevokedError ||
-  cause instanceof TokenInvalidError;
+const expired = (cause?: unknown) =>
+  new TangledAuthError({
+    reason: "expired",
+    detail: "The Tangled sign-in expired. Sign in again in Settings → Source Control.",
+    ...(cause === undefined ? {} : { cause }),
+  });
 
 class CallbackPending extends Schema.TaggedError<CallbackPending>()("CallbackPending", {}) {}
 
+interface PendingSignIn {
+  readonly deferred: Deferred.Deferred<{ readonly account: string }, SourceControlSignInError>;
+  readonly fiber: Fiber.Fiber<unknown, unknown>;
+}
+
 /** @public */
-export const make = Effect.fn("TangledAuth.make")(function* (
-  client: Effect.Effect<TangledOAuthClient, TangledAuthError>,
-) {
+export const make = Effect.fn("TangledAuth.make")(function* (options: {
+  readonly relayOrigin: string;
+}) {
   const sourceControlHost = yield* SourceControlHost.SourceControlHost;
-  const httpClient = yield* HttpClient.HttpClient;
+  const http = yield* HttpClient.HttpClient;
   const scope = yield* Effect.scope;
   const pending = yield* Ref.make<ReadonlyMap<string, PendingSignIn>>(new Map());
+  const refreshing = yield* Semaphore.make(1);
+  const oauth = TangledOAuth.makeClient(http, yield* PublicHostGuard);
+  const relay = options.relayOrigin.replace(/\/+$/u, "");
+  const clientId = `${relay}/tangled/client-metadata.json`;
+  const redirectUri = `${relay}/tangled/callback`;
 
-  const storedDid = readSavedSession(sourceControlHost).pipe(
-    Effect.map(({ session }) => Option.map(session, (saved) => saved.tokenSet.sub)),
+  const stored = sourceControlHost.settings.get.pipe(
+    Effect.map((settings) => {
+      const { signIns } = readSourceControlHostSettings(
+        SignInSettings,
+        settings.sourceControlHosts[KIND],
+      );
+      return { signIns, session: decodeSession(signIns[HOST] ?? "") };
+    }),
+    Effect.orElseSucceed(() => ({
+      signIns: {} as Readonly<Record<string, string>>,
+      session: Option.none<TangledOAuth.Session>(),
+    })),
   );
+
+  /** A sign-in stores any account; a refresh rewrites only the session it refreshed. */
+  const writeSession = Effect.fn("TangledAuth.writeSession")(
+    function* (
+      next: TangledOAuth.Session | null,
+      when: (current: Option.Option<TangledOAuth.Session>) => boolean,
+    ) {
+      const { signIns, session } = yield* stored;
+      if (!when(session)) return;
+      const updated = { ...signIns };
+      if (next === null) delete updated[HOST];
+      else updated[HOST] = encodeSession(next);
+      yield* sourceControlHost.settings.update({
+        sourceControlHosts: { [KIND]: { signIns: updated } },
+      });
+    },
+    Effect.mapError(
+      (cause) =>
+        new TangledAuthError({
+          reason: "failed",
+          detail: "The server could not save the Tangled sign-in.",
+          cause,
+        }),
+    ),
+  );
+
+  const resolveMiniDoc = (identifier: string) =>
+    http
+      .execute(
+        HttpClientRequest.get(`${BOBBIN}/xrpc/${NSID.resolveIdentity}`).pipe(
+          HttpClientRequest.setUrlParam("identifier", identifier),
+        ),
+      )
+      .pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap(HttpClientResponse.schemaBodyJson(MiniDoc)),
+        Effect.timeout(REQUEST_TIMEOUT),
+        Effect.mapError(
+          (cause) =>
+            new TangledOAuth.OAuthError({ detail: `Could not resolve ${identifier}.`, cause }),
+        ),
+      );
 
   const handles = yield* Cache.makeWith(
     (did: string) =>
-      client.pipe(
-        Effect.flatMap((oauth) =>
-          Effect.tryPromise({
-            try: () => oauth.handle(did),
-            catch: (cause) =>
-              new TangledAuthError({ reason: "failed", detail: errorMessage(cause), cause }),
-          }),
-        ),
-        Effect.timeout(REQUEST_TIMEOUT),
+      resolveMiniDoc(did).pipe(
+        // atproto's placeholder for a handle that no longer verifies.
+        Effect.map((doc) => (doc.handle === "handle.invalid" ? null : doc.handle)),
       ),
     {
       capacity: 8,
@@ -323,63 +178,103 @@ export const make = Effect.fn("TangledAuth.make")(function* (
     );
 
   const viewer: TangledAuth["Service"]["viewer"] = Effect.gen(function* () {
-    const did = yield* storedDid;
-    if (Option.isNone(did)) return Option.none<TangledViewer>();
-    return Option.some({ did: did.value, handle: yield* handleOf(did.value) });
+    const { session } = yield* stored;
+    if (Option.isNone(session)) return Option.none<TangledViewer>();
+    return Option.some({ did: session.value.did, handle: yield* handleOf(session.value.did) });
   }).pipe(Effect.withSpan("TangledAuth.viewer"));
+
+  /**
+   * The stored session with an access token worth sending: refreshed when it is about to lapse,
+   * or when the PDS refused `stale`. Refreshes run one at a time, since a refresh token works once.
+   */
+  const usableSession = (stale: string | null) =>
+    refreshing.withPermits(1)(
+      Effect.gen(function* () {
+        const current = (yield* stored).session;
+        if (Option.isNone(current))
+          return yield* new TangledAuthError({
+            reason: "not-signed-in",
+            detail: "Sign in to Tangled in Settings → Source Control.",
+          });
+        const session = current.value;
+        const now = yield* Clock.currentTimeMillis;
+        if (
+          stale === null ? session.expiresAt - REFRESH_MARGIN > now : session.accessToken !== stale
+        )
+          return session;
+        const stillStored = (found: Option.Option<TangledOAuth.Session>) =>
+          Option.isSome(found) &&
+          found.value.did === session.did &&
+          found.value.refreshToken === session.refreshToken;
+        const tokens = yield* oauth.refresh(session, clientId).pipe(
+          Effect.catchTags({
+            OAuthError: (error) =>
+              error.error === "invalid_grant"
+                ? writeSession(null, stillStored).pipe(Effect.andThen(Effect.fail(expired(error))))
+                : Effect.fail(
+                    new TangledAuthError({
+                      reason: "failed",
+                      detail: `Could not refresh the Tangled sign-in: ${error.detail}`,
+                      cause: error,
+                    }),
+                  ),
+          }),
+        );
+        const next = yield* TangledOAuth.sessionOf({
+          tokens,
+          server: { issuer: session.issuer, token_endpoint: session.tokenEndpoint },
+          pds: session.pds,
+          key: session.dpopKey,
+          previous: session,
+        });
+        yield* writeSession(next, stillStored);
+        return next;
+      }),
+    );
 
   /** An XRPC call to the viewer's PDS as the viewer; a refused session fails as expired. */
   const pdsCall = Effect.fn("TangledAuth.pdsCall")(function* (
     nsid: string,
     request: { readonly query?: Record<string, string>; readonly body?: unknown },
   ) {
-    const did = yield* storedDid;
-    if (Option.isNone(did)) {
-      return yield* new TangledAuthError({
-        reason: "not-signed-in",
-        detail: "Sign in to Tangled in Settings → Source Control.",
-      });
-    }
-    const oauth = yield* client;
-    const path = `/xrpc/${nsid}${request.query ? `?${new URLSearchParams(request.query)}` : ""}`;
-    const init: RequestInit | undefined =
-      request.body === undefined
-        ? undefined
-        : {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: encodeJson(request.body),
-          };
-    const response = yield* Effect.tryPromise({
-      try: () => oauth.fetch(did.value, path, init),
-      catch: (cause) =>
-        isExpiredSession(cause)
-          ? new TangledAuthError({
-              reason: "expired",
-              detail: "The Tangled sign-in expired. Sign in again in Settings → Source Control.",
-              cause,
-            })
-          : new TangledAuthError({
-              reason: "failed",
-              detail: `Could not reach your PDS: ${errorMessage(cause)}`,
-              cause,
-            }),
-    });
-    const body = yield* Effect.promise(() =>
-      response.json().then(
-        (value: unknown) => value,
-        () => null,
-      ),
-    );
-    if (response.status === 401) {
-      return yield* new TangledAuthError({
-        reason: "expired",
-        detail: "Your PDS no longer accepts the Tangled sign-in. Sign in again.",
-      });
-    }
+    const send = (session: TangledOAuth.Session) => {
+      const url = `${session.pds.replace(/\/+$/u, "")}/xrpc/${nsid}`;
+      return oauth
+        .resource(
+          session,
+          request.body === undefined
+            ? HttpClientRequest.get(url).pipe(HttpClientRequest.setUrlParams(request.query ?? {}))
+            : HttpClientRequest.post(url).pipe(
+                HttpClientRequest.bodyText(encodeJson(request.body), "application/json"),
+              ),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new TangledAuthError({
+                reason: "failed",
+                detail: `Could not reach your PDS: ${cause.detail}`,
+                cause,
+              }),
+          ),
+        );
+    };
+    const session = yield* usableSession(null);
+    let reply = yield* send(session);
+    // The PDS may have revoked the token early; one refresh decides whether the session still holds.
+    if (reply.response.status === 401)
+      reply = yield* send(yield* usableSession(session.accessToken));
+    if (reply.response.status === 401) return yield* expired();
     const fields =
-      typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
-    return { did: did.value, status: response.status, ok: response.ok, fields };
+      typeof reply.body === "object" && reply.body !== null
+        ? (reply.body as Record<string, unknown>)
+        : {};
+    return {
+      did: session.did,
+      status: reply.response.status,
+      ok: reply.response.status >= 200 && reply.response.status < 300,
+      fields,
+    };
   });
 
   const refusal = (
@@ -401,6 +296,10 @@ export const make = Effect.fn("TangledAuth.make")(function* (
       ? Option.some({ uri: fields.uri, cid: fields.cid })
       : Option.none();
 
+  const viewerDid = stored.pipe(
+    Effect.map(({ session }) => Option.match(session, { onNone: () => "", onSome: (s) => s.did })),
+  );
+
   const serviceAuth: TangledAuth["Service"]["serviceAuth"] = Effect.fn("TangledAuth.serviceAuth")(
     function* ({ aud, lxm }) {
       const reply = yield* pdsCall("com.atproto.server.getServiceAuth", { query: { aud, lxm } });
@@ -412,9 +311,8 @@ export const make = Effect.fn("TangledAuth.make")(function* (
 
   const getRecord: TangledAuth["Service"]["getRecord"] = Effect.fn("TangledAuth.getRecord")(
     function* ({ collection, rkey }) {
-      const did = Option.getOrNull(yield* storedDid) ?? "";
       const reply = yield* pdsCall("com.atproto.repo.getRecord", {
-        query: { repo: did, collection, rkey },
+        query: { repo: yield* viewerDid, collection, rkey },
       });
       if (reply.fields.error === "RecordNotFound") return Option.none();
       if (!reply.ok) return yield* refusal(`read ${collection}/${rkey}`, reply);
@@ -425,58 +323,126 @@ export const make = Effect.fn("TangledAuth.make")(function* (
   const createRecord: TangledAuth["Service"]["createRecord"] = Effect.fn(
     "TangledAuth.createRecord",
   )(function* ({ collection, rkey, record }) {
-    const did = Option.getOrNull(yield* storedDid) ?? "";
     const reply = yield* pdsCall("com.atproto.repo.createRecord", {
-      body: { repo: did, collection, rkey, record },
+      body: { repo: yield* viewerDid, collection, rkey, record },
     });
     const written = reply.ok ? recordRef(reply.fields) : Option.none();
     if (Option.isNone(written)) return yield* refusal(`write ${collection}/${rkey}`, reply);
     return written.value;
   });
 
-  const relayCallback = (state: string) =>
-    httpClient.get(`${RELAY_ORIGIN}/tangled/callback/${state}`).pipe(
-      Effect.filterOrFail(
-        (response) => response.status === 200,
-        () => new CallbackPending(),
-      ),
-      Effect.flatMap((response) => response.text),
-      Effect.timeout(REQUEST_TIMEOUT),
-      Effect.map((query) => new URLSearchParams(query)),
-    );
+  /** Files `state` with the relay, which then hands its callback only to this poll token. */
+  const registerState = (state: string) =>
+    http
+      .execute(
+        HttpClientRequest.post(`${relay}/tangled/start`).pipe(
+          HttpClientRequest.bodyJsonUnsafe({ state }),
+        ),
+      )
+      .pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap(
+          HttpClientResponse.schemaBodyJson(Schema.Struct({ pollToken: Schema.String })),
+        ),
+        Effect.map(({ pollToken }) => pollToken),
+        Effect.timeout(REQUEST_TIMEOUT),
+      );
 
-  const finish = Effect.fn("TangledAuth.finish")(function* (
-    oauth: TangledOAuthClient,
-    state: string,
-    expiresAt: number,
+  const relayCallback = (state: string, pollToken: string) =>
+    http
+      .execute(
+        HttpClientRequest.get(`${relay}/tangled/callback/${state}`).pipe(
+          HttpClientRequest.bearerToken(pollToken),
+        ),
+      )
+      .pipe(
+        Effect.filterOrFail(
+          (response) => response.status === 200,
+          () => new CallbackPending(),
+        ),
+        Effect.flatMap((response) => response.text),
+        Effect.timeout(REQUEST_TIMEOUT),
+        Effect.map((query) => new URLSearchParams(query)),
+      );
+
+  /** Where `did`'s PDS is, once its authorization server is confirmed to be `issuer`. */
+  const confirmAccount = Effect.fn("TangledAuth.confirmAccount")(function* (
+    did: string,
+    issuer: string,
   ) {
+    const doc = yield* resolveMiniDoc(did);
+    if (doc.did !== did || doc.pds === undefined)
+      return yield* new TangledOAuth.OAuthError({ detail: `${did} names no PDS.` });
+    const server = yield* oauth.discover(doc.pds);
+    if (server.issuer !== issuer)
+      return yield* new TangledOAuth.OAuthError({
+        detail: `${did} is not hosted by ${new URL(issuer).host}.`,
+      });
+    return doc.pds;
+  });
+
+  const finish = Effect.fn("TangledAuth.finish")(function* (attempt: {
+    readonly server: TangledOAuth.ServerMetadata;
+    readonly account: { readonly did: string; readonly pds: string } | null;
+    readonly key: TangledOAuth.DpopJwk;
+    readonly state: string;
+    readonly verifier: string;
+    readonly pollToken: string;
+    readonly expiresAt: number;
+  }) {
     const now = yield* Clock.currentTimeMillis;
     // Pending, a dropped poll and a relay hiccup all wait for the next tick.
-    const params = yield* relayCallback(state).pipe(
+    const params = yield* relayCallback(attempt.state, attempt.pollToken).pipe(
       Effect.retry(
         Schedule.spaced(POLL_INTERVAL).pipe(
-          Schedule.upTo({ duration: Duration.millis(Math.max(0, expiresAt - now)) }),
+          Schedule.upTo({ duration: Duration.millis(Math.max(0, attempt.expiresAt - now)) }),
         ),
       ),
       Effect.mapError(() => signInError(HOST, "expired", "The sign-in expired. Start again.")),
     );
-    const { did } = yield* Effect.tryPromise({
-      try: () => oauth.callback(params),
-      catch: (cause) => {
-        const error = params.get("error");
-        if (error === "access_denied") {
-          return signInError(HOST, "denied", "The sign-in was declined.", cause);
-        }
-        return signInError(
-          HOST,
-          "failed",
-          `Your PDS refused the sign-in: ${params.get("error_description") ?? error ?? errorMessage(cause)}`,
-          cause,
-        );
-      },
-    });
-    yield* Cache.invalidate(handles, did);
-    return { account: yield* handleOf(did) };
+    const failed = (detail: string, cause?: unknown) => signInError(HOST, "failed", detail, cause);
+    if (params.get("state") !== attempt.state)
+      return yield* failed("The sign-in answered for another attempt. Start again.");
+    const error = params.get("error");
+    if (error === "access_denied")
+      return yield* signInError(HOST, "denied", "The sign-in was declined.");
+    // RFC 9207: the issuer named in the callback must be the server the sign-in started at.
+    if (params.get("iss") !== attempt.server.issuer)
+      return yield* failed("The sign-in came back from another server. Start again.");
+    const code = params.get("code");
+    if (error !== null || code === null)
+      return yield* failed(
+        `Your PDS refused the sign-in: ${params.get("error_description") ?? error ?? "no code"}`,
+      );
+    const session = yield* Effect.gen(function* () {
+      const tokens = yield* oauth.exchangeCode({
+        server: attempt.server,
+        key: attempt.key,
+        clientId,
+        redirectUri,
+        code,
+        verifier: attempt.verifier,
+      });
+      if (attempt.account !== null && tokens.sub !== attempt.account.did)
+        return yield* new TangledOAuth.OAuthError({
+          detail: "Your PDS signed in a different account than the one asked for.",
+        });
+      const pds =
+        attempt.account?.pds ?? (yield* confirmAccount(tokens.sub, attempt.server.issuer));
+      return yield* TangledOAuth.sessionOf({
+        tokens,
+        server: attempt.server,
+        pds,
+        key: attempt.key,
+      });
+    }).pipe(
+      Effect.mapError((cause) => failed(`Your PDS refused the sign-in: ${cause.detail}`, cause)),
+    );
+    yield* writeSession(session, () => true).pipe(
+      Effect.mapError((cause) => failed(cause.detail, cause)),
+    );
+    yield* Cache.invalidate(handles, session.did);
+    return { account: yield* handleOf(session.did) };
   });
 
   const start: SourceControlSignIn["start"] = Effect.fn("TangledAuth.signIn.start")(
@@ -487,29 +453,62 @@ export const make = Effect.fn("TangledAuth.make")(function* (
       }
       const entered = rawAccount?.trim().replace(/^@/, "") ?? "";
       // Handles are case-insensitive and phone keyboards capitalize; DIDs and PDS URLs are not.
-      const account = /^did:|:\/\//u.test(entered) ? entered : entered.toLowerCase();
+      const server = /:\/\//u.test(entered);
+      const account = server || isDid(entered) ? entered : entered.toLowerCase();
       if (account === "") {
         return yield* signInError(host, "failed", "Enter your handle to sign in to Tangled.");
       }
-      const oauth = yield* client.pipe(
-        Effect.mapError((error) => signInError(host, "failed", error.detail, error)),
-      );
-      const { url, state } = yield* Effect.tryPromise({
-        try: () => oauth.authorize(account),
-        catch: (cause) =>
+      const target = Effect.gen(function* () {
+        if (server)
+          return { server: yield* oauth.discover(account), account: null, hint: undefined };
+        const doc = yield* resolveMiniDoc(account);
+        if (doc.pds === undefined)
+          return yield* new TangledOAuth.OAuthError({ detail: `${account} names no PDS.` });
+        return {
+          server: yield* oauth.discover(doc.pds),
+          account: { did: doc.did, pds: doc.pds },
+          hint: account,
+        };
+      });
+      const prepared = yield* Effect.gen(function* () {
+        const { hint, ...found } = yield* target;
+        const secrets = TangledOAuth.makeAuthorizationSecrets();
+        const key = TangledOAuth.makeDpopKey();
+        const pollToken = yield* registerState(secrets.state).pipe(
+          Effect.mapError(
+            (cause) =>
+              new TangledOAuth.OAuthError({
+                detail: "the server could not reach the Tangled sign-in relay.",
+                cause,
+              }),
+          ),
+        );
+        const url = yield* oauth.pushAuthorization({
+          server: found.server,
+          key,
+          clientId,
+          redirectUri,
+          state: secrets.state,
+          challenge: secrets.challenge,
+          loginHint: hint,
+        });
+        return { ...found, key, state: secrets.state, verifier: secrets.verifier, pollToken, url };
+      }).pipe(
+        Effect.mapError((cause) =>
           signInError(
             host,
             "failed",
-            `Could not start signing in as ${account}: ${errorMessage(cause)}`,
+            `Could not start signing in as ${account}: ${cause.detail}`,
             cause,
           ),
-      });
+        ),
+      );
       const expiresAt = (yield* Clock.currentTimeMillis) + Duration.toMillis(SIGN_IN_LIFETIME);
       const deferred = yield* Deferred.make<
         { readonly account: string },
         SourceControlSignInError
       >();
-      const fiber = yield* finish(oauth, state, expiresAt).pipe(
+      const fiber = yield* finish({ ...prepared, expiresAt }).pipe(
         Deferred.into(deferred),
         Effect.forkIn(scope),
       );
@@ -524,7 +523,7 @@ export const make = Effect.fn("TangledAuth.make")(function* (
         );
         yield* Fiber.interrupt(previous.fiber);
       }
-      return { verificationUri: url, expiresAt } satisfies SourceControlSignInPrompt;
+      return { verificationUri: prepared.url, expiresAt } satisfies SourceControlSignInPrompt;
     },
   );
 
@@ -574,17 +573,10 @@ export const layer: Layer.Layer<
 > = Layer.effect(
   TangledAuth,
   Effect.gen(function* () {
-    const context = yield* Effect.context<
-      SourceControlHost.SourceControlHost | HttpClient.HttpClient
-    >();
-    // Built on first use and kept, so a server that never signs in never reaches the relay.
-    const clients = yield* Cache.makeWith(
-      (_: "client") => makeNodeClient.pipe(Effect.provide(context)),
-      {
-        capacity: 1,
-        timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
-      },
+    const relayOrigin = yield* Config.String(RELAY_ORIGIN_ENV).pipe(
+      Config.withDefault(DEFAULT_RELAY_ORIGIN),
+      Effect.orElseSucceed(() => DEFAULT_RELAY_ORIGIN),
     );
-    return yield* make(Cache.get(clients, "client"));
+    return yield* make({ relayOrigin });
   }),
 );

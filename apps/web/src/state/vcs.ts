@@ -1,4 +1,3 @@
-import { createContext } from "react";
 import type { EnvironmentId, VcsStatusResult } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import {
@@ -47,8 +46,6 @@ export const vcsBranchRevalidation = createVcsStatusRevalidationAtomFamily({
   subscribeWake: subscribeDocumentReturn,
   wakeDebounceMs: 250,
 });
-
-export const VcsTerminologyContext = createContext(resolveVcsTerminology(null));
 
 export const selectVcsTerminology = (status: AsyncResult.AsyncResult<VcsStatusResult, unknown>) =>
   resolveVcsTerminology(Option.getOrNull(AsyncResult.value(status)));

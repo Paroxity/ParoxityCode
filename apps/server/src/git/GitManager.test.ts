@@ -6625,14 +6625,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
                 Layer.mock(JjWorkflow.JjWorkflow)({}),
                 Layer.mock(JjVcsDriver.JjVcsDriver)({
                   checkpoints: unusedJjCheckpoints,
-                  capabilities: {
-                    kind: "jj",
-                    supportsWorktrees: false,
-                    supportsBookmarks: true,
-                    supportsAtomicSnapshot: true,
-                    supportsPushDefaultRemote: false,
-                    ignoreClassifier: "git-compatible-fallback",
-                  },
                 }),
               ),
             ),

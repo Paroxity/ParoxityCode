@@ -65,6 +65,14 @@ export interface VcsWorkflowOps {
     input: VcsStatusInput,
     options?: GitManager.GitRemoteStatusOptions,
   ) => Effect.Effect<VcsStatusRemoteResult | null, GitManagerServiceError>;
+  /**
+   * Shares repository reads across the status calls in `effect`, one refresh. A mutation must
+   * start a new scope. Git has nothing to share, so its scope is `effect` itself.
+   */
+  readonly withRefreshScope: <A, E, R>(
+    cwd: string,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>;
   readonly invalidateLocalStatus: (cwd: string) => Effect.Effect<void, never>;
   readonly invalidateRemoteStatus: (cwd: string) => Effect.Effect<void, never>;
   readonly invalidateStatus: (cwd: string) => Effect.Effect<void, never>;
@@ -226,58 +234,6 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((cwd) => withWorkspaceLease(cwd, effect)),
     );
 
-  const ensureGit = Effect.fn("GitWorkflowService.ensureGit")(function* (
-    operation: string,
-    cwd: string,
-  ) {
-    const handle = yield* registry.resolve({ cwd }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new GitManagerError({
-            operation,
-            cwd,
-            detail: "Failed to resolve the VCS driver for this Git workflow.",
-            cause,
-          }),
-      ),
-    );
-    if (handle.kind !== "git") {
-      return yield* new GitManagerError({
-        operation,
-        cwd,
-        detail: `The ${operation} workflow currently supports Git repositories only; detected ${handle.kind}. (${cwd})`,
-      });
-    }
-    return handle;
-  });
-
-  const ensureGitCommand = Effect.fn("GitWorkflowService.ensureGitCommand")(function* (
-    operation: string,
-    cwd: string,
-  ) {
-    const handle = yield* registry.resolve({ cwd }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new GitCommandError({
-            operation,
-            command: "vcs-route",
-            cwd,
-            detail: "Failed to resolve the VCS driver for this Git command.",
-            cause,
-          }),
-      ),
-    );
-    if (handle.kind !== "git") {
-      return yield* new GitCommandError({
-        operation,
-        command: "vcs-route",
-        cwd,
-        detail: `The ${operation} command currently supports Git repositories only; detected ${handle.kind}.`,
-      });
-    }
-    return handle;
-  });
-
   const jjWorkflow = yield* JjWorkflow.JjWorkflow;
   const jj = yield* JjVcsDriver.JjVcsDriver;
 
@@ -289,17 +245,21 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((workspaceRoot) => withCheckoutLease(workspaceRoot, effect)),
     );
 
+  type WorkflowHandle = VcsDriverRegistry.VcsDriverHandle & { readonly kind: WorkflowKind };
+
   /**
-   * The driver kind that owns a project cwd. `null` means "not a repository", which is what the
+   * The driver that owns a project cwd. `null` means "not a repository", which is what the
    * `nonRepository*` shapes already express, and an unknown kind degrades to it too. A detection
    * *failure* is a different thing and stays in the error channel: reporting a healthy repository
    * as absent hides the real reason from every caller and from the user.
    */
-  const resolveWorkflowKind = (cwd: string): Effect.Effect<WorkflowKind | null, VcsError> =>
+  const detectWorkflow = (cwd: string): Effect.Effect<WorkflowHandle | null, VcsError> =>
     registry
       .detect({ cwd })
       .pipe(
-        Effect.map((handle) => (handle === null || handle.kind === "unknown" ? null : handle.kind)),
+        Effect.map((handle) =>
+          handle === null || handle.kind === "unknown" ? null : { ...handle, kind: handle.kind },
+        ),
       );
 
   /**
@@ -311,9 +271,9 @@ export const make = Effect.gen(function* () {
     projectCwd: string,
     workspacePath: string,
   ): Effect.fn.Return<WorkflowKind | null, VcsError> {
-    const projectKind = yield* resolveWorkflowKind(projectCwd);
+    const projectKind = (yield* detectWorkflow(projectCwd))?.kind ?? null;
     if (projectKind !== "jj") return projectKind;
-    return yield* resolveWorkflowKind(workspacePath).pipe(Effect.map((kind) => kind ?? "jj"));
+    return (yield* detectWorkflow(workspacePath))?.kind ?? "jj";
   });
 
   const missingRepositoryCause = (cwd: string) =>
@@ -323,89 +283,60 @@ export const make = Effect.gen(function* () {
       detail: `No supported VCS repository was detected at ${cwd}.`,
     });
 
-  const notARepositoryCommand = (operation: string, cwd: string) =>
-    Effect.fail(
-      new GitCommandError({
-        operation,
-        command: "vcs-route",
-        cwd,
-        detail: "Failed to resolve the VCS driver for this Git command.",
-        cause: missingRepositoryCause(cwd),
-      }),
-    );
+  type Routing<Error> = {
+    readonly detect: (
+      operation: string,
+      cwd: string,
+    ) => Effect.Effect<WorkflowHandle | null, Error>;
+    readonly mapDetectError: (
+      operation: string,
+      cwd: string,
+    ) => <A, R>(effect: Effect.Effect<A, VcsError, R>) => Effect.Effect<A, Error, R>;
+    readonly notARepository: (operation: string, cwd: string) => Effect.Effect<never, Error>;
+  };
 
-  const notARepositoryWorkflow = (operation: string, cwd: string) =>
-    Effect.fail(
-      new GitManagerError({
-        operation,
-        cwd,
-        detail: "Failed to resolve the VCS driver for this Git workflow.",
-        cause: missingRepositoryCause(cwd),
-      }),
-    );
-
-  const undetectableCommand = (operation: string, cwd: string, detecting = false) =>
-    Effect.mapError(
-      (cause: VcsError) =>
-        new GitCommandError({
-          operation,
-          command: "vcs-route",
-          cwd,
-          detail: detecting
-            ? "Failed to detect a VCS repository for this Git command."
-            : "Failed to resolve the VCS driver for this Git command.",
-          cause,
-        }),
-    );
-
-  const undetectableWorkflow = (operation: string, cwd: string, detecting = false) =>
-    Effect.mapError(
-      (cause: VcsError) =>
-        new GitManagerError({
+  /** Commands fail with `GitCommandError`, workflows with `GitManagerError`; the wording matches. */
+  const makeRouting = <Error>(
+    subject: "command" | "workflow",
+    detecting: boolean,
+    toError: (operation: string, cwd: string, detail: string, cause: unknown) => Error,
+  ): Routing<Error> => {
+    const unresolved = `Failed to resolve the VCS driver for this Git ${subject}.`;
+    const mapDetectError: Routing<Error>["mapDetectError"] = (operation, cwd) =>
+      Effect.mapError((cause: VcsError) =>
+        toError(
           operation,
           cwd,
-          detail: detecting
-            ? "Failed to detect a VCS repository for this Git workflow."
-            : "Failed to resolve the VCS driver for this Git workflow.",
+          detecting ? `Failed to detect a VCS repository for this Git ${subject}.` : unresolved,
           cause,
-        }),
-    );
-
-  const commandRouting = {
-    kind: (operation: string, cwd: string) =>
-      resolveWorkflowKind(cwd).pipe(undetectableCommand(operation, cwd)),
-    notARepository: notARepositoryCommand,
+        ),
+      );
+    return {
+      detect: (operation, cwd) => detectWorkflow(cwd).pipe(mapDetectError(operation, cwd)),
+      mapDetectError,
+      notARepository: (operation, cwd) =>
+        Effect.fail(toError(operation, cwd, unresolved, missingRepositoryCause(cwd))),
+    };
   };
-
-  const workflowRouting = {
-    kind: (operation: string, cwd: string) =>
-      resolveWorkflowKind(cwd).pipe(undetectableWorkflow(operation, cwd)),
-    notARepository: notARepositoryWorkflow,
-  };
-  const statusRouting = {
-    ...workflowRouting,
-    kind: (operation: string, cwd: string) =>
-      resolveWorkflowKind(cwd).pipe(undetectableWorkflow(operation, cwd, true)),
-  };
-
-  const refsRouting = {
-    ...commandRouting,
-    kind: (operation: string, cwd: string) =>
-      resolveWorkflowKind(cwd).pipe(undetectableCommand(operation, cwd, true)),
-  };
+  const commandError = (operation: string, cwd: string, detail: string, cause: unknown) =>
+    new GitCommandError({ operation, command: "vcs-route", cwd, detail, cause });
+  const workflowError = (operation: string, cwd: string, detail: string, cause: unknown) =>
+    new GitManagerError({ operation, cwd, detail, cause });
+  const commandRouting = makeRouting("command", false, commandError);
+  const refsRouting = makeRouting("command", true, commandError);
+  const workflowRouting = makeRouting("workflow", false, workflowError);
+  const statusRouting = makeRouting("workflow", true, workflowError);
 
   // Existing Git paths must remain usable when repository detection is unavailable.
   const detectForFacade = (cwd: string) =>
     registry.detect({ cwd, jjOnly: true }).pipe(Effect.orElseSucceed(() => null));
 
-  type Routing<Error> = {
-    readonly kind: (operation: string, cwd: string) => Effect.Effect<WorkflowKind | null, Error>;
-    readonly notARepository: (operation: string, cwd: string) => Effect.Effect<never, Error>;
-  };
-
+  /** Each arm receives the handle detection resolved, so it never has to detect again. */
   type RouteArms<Input, Output, Error> = {
-    readonly git: (input: Input) => Effect.Effect<Output, Error>;
-    readonly jj: (input: Input) => Effect.Effect<Output, Error>;
+    readonly [Kind in WorkflowKind]: (
+      input: Input,
+      handle: WorkflowHandle,
+    ) => Effect.Effect<Output, Error>;
   };
 
   /** Routes on the project cwd; `fallback` answers for a directory that is not a repository. */
@@ -418,10 +349,10 @@ export const make = Effect.gen(function* () {
     ) =>
     (input: Input) =>
       routing
-        .kind(operation, input.cwd)
+        .detect(operation, input.cwd)
         .pipe(
-          Effect.flatMap((kind) =>
-            kind === null ? fallback(operation, input.cwd) : arms[kind](input),
+          Effect.flatMap((handle) =>
+            handle === null ? fallback(operation, input.cwd) : arms[handle.kind](input, handle),
           ),
         );
 
@@ -523,12 +454,12 @@ export const make = Effect.gen(function* () {
     validateWorkspace: Effect.fn("GitWorkflowService.validateWorkspace")(
       function (projectCwd, workspacePath) {
         return registry.detect({ cwd: projectCwd, jjOnly: true }).pipe(
-          undetectableWorkflow("GitWorkflowService.validateWorkspace", projectCwd, true),
+          statusRouting.mapDetectError("GitWorkflowService.validateWorkspace", projectCwd),
           Effect.flatMap((project) => {
             if (project?.kind !== "jj") return Effect.succeed(true);
             if (workspacePath === null) return Effect.succeed(false);
             return registry.detect({ cwd: workspacePath, jjOnly: true }).pipe(
-              undetectableWorkflow("GitWorkflowService.validateWorkspace", workspacePath, true),
+              statusRouting.mapDetectError("GitWorkflowService.validateWorkspace", workspacePath),
               Effect.map(
                 (workspace) =>
                   workspace?.kind === "jj" &&
@@ -589,10 +520,8 @@ export const make = Effect.gen(function* () {
           })(input);
     }),
     status: Effect.fn("GitWorkflowService.status")(function* (input) {
-      const handle = yield* registry
-        .detect({ cwd: input.cwd })
-        .pipe(undetectableWorkflow("GitWorkflowService.status", input.cwd, true));
-      if (handle === null || handle.kind === "unknown") return nonRepositoryStatus();
+      const handle = yield* statusRouting.detect("GitWorkflowService.status", input.cwd);
+      if (handle === null) return nonRepositoryStatus();
       if (handle.kind === "jj") return yield* jjWorkflow.status(input);
       const result = yield* gitManager.status(input);
       return handle.notice
@@ -600,10 +529,8 @@ export const make = Effect.gen(function* () {
         : result;
     }),
     localStatus: Effect.fn("GitWorkflowService.localStatus")(function* (input, options) {
-      const handle = yield* registry
-        .detect({ cwd: input.cwd })
-        .pipe(undetectableWorkflow("GitWorkflowService.localStatus", input.cwd, true));
-      if (handle === null || handle.kind === "unknown") return nonRepositoryLocalStatus();
+      const handle = yield* statusRouting.detect("GitWorkflowService.localStatus", input.cwd);
+      if (handle === null) return nonRepositoryLocalStatus();
       if (handle.kind === "jj") return yield* jjWorkflow.localStatus(input);
       const result = yield* gitManager.localStatus(input, options);
       return handle.notice
@@ -662,6 +589,13 @@ export const make = Effect.gen(function* () {
         jj: (statusInput: VcsStatusInput) => jjWorkflow.remoteStatus(statusInput, options),
       })(input);
     }),
+    withRefreshScope: Effect.fn("GitWorkflowService.withRefreshScope")(function* <A, E, R>(
+      cwd: string,
+      effect: Effect.Effect<A, E, R>,
+    ) {
+      const handle = yield* detectForFacade(cwd);
+      return yield* handle?.kind === "jj" ? jjWorkflow.withRefreshScope(cwd, effect) : effect;
+    }),
     invalidateLocalStatus: invalidate("invalidateLocalStatus"),
     invalidateRemoteStatus: invalidate("invalidateRemoteStatus"),
     // jj status does not follow Git refs or HEAD, so jj repositories always refresh in full.
@@ -713,14 +647,10 @@ export const make = Effect.gen(function* () {
     }),
     runStackedAction: Effect.fn("GitWorkflowService.runStackedAction")(function (input, options) {
       return route("GitWorkflowService.runStackedAction", workflowRouting, {
-        git: (actionInput: GitRunStackedActionInput) =>
-          ensureGit("GitWorkflowService.runStackedAction", actionInput.cwd).pipe(
-            Effect.flatMap((handle) =>
-              withCheckoutLease(
-                handle.repository.rootPath,
-                gitManager.runStackedAction(actionInput, options),
-              ),
-            ),
+        git: (actionInput: GitRunStackedActionInput, handle) =>
+          withCheckoutLease(
+            handle.repository.rootPath,
+            gitManager.runStackedAction(actionInput, options),
           ),
         jj: (actionInput: GitRunStackedActionInput) =>
           withJjCheckoutLease(actionInput.cwd, jjWorkflow.runStackedAction(actionInput, options)),
@@ -734,15 +664,11 @@ export const make = Effect.gen(function* () {
       "GitWorkflowService.preparePullRequestThread",
       workflowRouting,
       {
-        git: (input) =>
+        git: (input, handle) =>
           input.mode === "local"
-            ? ensureGit("GitWorkflowService.preparePullRequestThread", input.cwd).pipe(
-                Effect.flatMap((handle) =>
-                  withCheckoutLease(
-                    handle.repository.rootPath,
-                    gitManager.preparePullRequestThread(input),
-                  ),
-                ),
+            ? withCheckoutLease(
+                handle.repository.rootPath,
+                gitManager.preparePullRequestThread(input),
               )
             : gitManager.preparePullRequestThread(input),
         jj: (input) =>
@@ -825,18 +751,12 @@ export const make = Effect.gen(function* () {
       "GitWorkflowService.resolveWorktreeBaseRemote",
       commandRouting,
       {
-        git: (input) =>
-          ensureGitCommand("GitWorkflowService.resolveWorktreeBaseRemote", input.cwd).pipe(
-            Effect.andThen(git.resolveWorktreeBaseRemote(input)),
-          ),
+        git: git.resolveWorktreeBaseRemote,
         jj: jjWorkflow.resolveWorktreeBaseRemote,
       },
     ),
     fetchWorktreeBaseCommit: route("GitWorkflowService.fetchWorktreeBaseCommit", commandRouting, {
-      git: (input) =>
-        ensureGitCommand("GitWorkflowService.fetchWorktreeBaseCommit", input.cwd).pipe(
-          Effect.andThen(git.fetchWorktreeBaseCommit(input)),
-        ),
+      git: git.fetchWorktreeBaseCommit,
       jj: jjWorkflow.fetchWorktreeBaseCommit,
     }),
     // jj has no remote HEAD; its default bookmark stands in for the remote's default branch.
@@ -864,10 +784,10 @@ export const make = Effect.gen(function* () {
     // project must keep being removable after the detection flip.
     removeWorktree: Effect.fn("GitWorkflowService.removeWorktree")(function (input) {
       return resolveWorkspaceKind(input.cwd, input.path).pipe(
-        undetectableCommand("GitWorkflowService.removeWorktree", input.cwd),
+        commandRouting.mapDetectError("GitWorkflowService.removeWorktree", input.cwd),
         Effect.flatMap((kind) =>
           kind === null
-            ? notARepositoryCommand("GitWorkflowService.removeWorktree", input.cwd)
+            ? commandRouting.notARepository("GitWorkflowService.removeWorktree", input.cwd)
             : kind === "git"
               ? git.removeWorktree(input)
               : jjWorkflow.removeWorktree(input),
@@ -883,13 +803,9 @@ export const make = Effect.gen(function* () {
       jj: jjWorkflow.deleteLocalBranch,
     }),
     createRef: route("GitWorkflowService.createRef", commandRouting, {
-      git: (input) =>
+      git: (input, handle) =>
         input.switchRef
-          ? ensureGitCommand("GitWorkflowService.createRef", input.cwd).pipe(
-              Effect.flatMap((handle) =>
-                withCheckoutLease(handle.repository.rootPath, git.createRef(input)),
-              ),
-            )
+          ? withCheckoutLease(handle.repository.rootPath, git.createRef(input))
           : git.createRef(input),
       jj: (input) =>
         input.switchRef
@@ -899,12 +815,8 @@ export const make = Effect.gen(function* () {
     // The Git driver's `switchRef` needs a `Scope` the service closes locally; the declared type
     // carries none, and leaking it would reach every caller. The jj arm needs no scope.
     switchRef: route("GitWorkflowService.switchRef", commandRouting, {
-      git: (input) =>
-        ensureGitCommand("GitWorkflowService.switchRef", input.cwd).pipe(
-          Effect.flatMap((handle) =>
-            withCheckoutLease(handle.repository.rootPath, Effect.scoped(git.switchRef(input))),
-          ),
-        ),
+      git: (input, handle) =>
+        withCheckoutLease(handle.repository.rootPath, Effect.scoped(git.switchRef(input))),
       jj: (input) => withJjCheckoutLease(input.cwd, jjWorkflow.switchRef(input)),
     }),
     renameBranch: route("GitWorkflowService.renameBranch", workflowRouting, {

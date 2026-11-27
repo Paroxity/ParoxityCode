@@ -1,4 +1,6 @@
+import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -21,6 +23,11 @@ const ProjectVcsConfigJson = fromLenientJson(ProjectVcsConfig);
 const decodeProjectVcsConfigJson = Schema.decodeUnknownEffect(ProjectVcsConfigJson);
 
 type ProjectVcsConfigFile = typeof ProjectVcsConfig.Type;
+
+const CONFIG_PATH_CACHE_CAPACITY = 2_048;
+// Every detection asks, and a repository without a config would stat each ancestor up to `/`.
+// A found path is rechecked on use; a config created within the TTL waits for it to expire.
+const CONFIG_PATH_CACHE_TTL = Duration.seconds(5);
 
 export interface VcsProjectConfigResolveInput {
   readonly cwd: string;
@@ -99,6 +106,21 @@ export const make = Effect.gen(function* () {
     }
   });
 
+  const configPaths = yield* Cache.makeWith<string, Option.Option<string>>(findConfigPath, {
+    capacity: CONFIG_PATH_CACHE_CAPACITY,
+    timeToLive: () => CONFIG_PATH_CACHE_TTL,
+  });
+
+  const cachedConfigPath = Effect.fn("VcsProjectConfig.cachedConfigPath")(function* (cwd: string) {
+    const cached = yield* Cache.get(configPaths, cwd);
+    if (Option.isNone(cached)) return cached;
+    if (yield* fileSystem.exists(cached.value).pipe(Effect.orElseSucceed(() => false))) {
+      return cached;
+    }
+    yield* Cache.invalidate(configPaths, cwd);
+    return yield* Cache.get(configPaths, cwd);
+  });
+
   const readConfiguredKind = Effect.fn("VcsProjectConfig.readConfiguredKind")(function* (
     cwd: string,
     configPath: string,
@@ -135,7 +157,7 @@ export const make = Effect.gen(function* () {
       return input.requestedKind;
     }
 
-    return yield* findConfigPath(input.cwd).pipe(
+    return yield* cachedConfigPath(input.cwd).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.succeed("auto" as const),

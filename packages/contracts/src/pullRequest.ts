@@ -261,7 +261,6 @@ export const PullRequestRound = Schema.Struct({
   headSha: TrimmedNonEmptyString,
   baseSha: TrimmedNonEmptyString,
   createdAt: IsoDateTime,
-  author: Schema.optional(PullRequestActor),
 });
 export type PullRequestRound = typeof PullRequestRound.Type;
 

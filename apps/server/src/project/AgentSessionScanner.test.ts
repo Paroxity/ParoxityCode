@@ -38,6 +38,8 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import type * as VcsDriver from "../vcs/VcsDriver.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { createJjRepo, describeJj, runGit, runJj } from "../vcs/testing/JjTestSupport.ts";
 
 const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
   id: ProjectId.make("project-1"),
@@ -4347,3 +4349,132 @@ describe("parseAgentSessionTranscript", () => {
     ).toEqual(expected);
   });
 });
+
+interface RealVcsScannerInput {
+  readonly claudeHomePath: string;
+  readonly codexHomePath: string;
+  readonly importedWorkspaceRoots?: ReadonlyArray<string>;
+  readonly configBaseDir?: string;
+  readonly providerInstances?: ContractServerSettings["providerInstances"];
+}
+
+const layerScannerWithRealVcs = (input: RealVcsScannerInput) =>
+  AgentSessionScanner.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        ServerSettings.layerTest({
+          providerInstances: {
+            [ProviderInstanceId.make("claudeAgent")]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              config: { homePath: input.claudeHomePath },
+            },
+            [ProviderInstanceId.make("codex")]: {
+              driver: ProviderDriverKind.make("codex"),
+              config: { homePath: input.codexHomePath },
+            },
+            ...input.providerInstances,
+          },
+        }),
+        ServerConfig.layerTest(
+          input.claudeHomePath,
+          input.configBaseDir ?? { prefix: "t3code-scanner-config-" },
+        ),
+        layerProjectStore(input.importedWorkspaceRoots ?? []),
+        Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+          list: () => Effect.succeed([]),
+        }),
+      ),
+    ),
+  );
+
+const runScanWithRealVcs = (input: RealVcsScannerInput) =>
+  Effect.gen(function* () {
+    const scanner = yield* AgentSessionScanner.AgentSessionScanner;
+    return yield* scanner.scan;
+  }).pipe(Effect.provide(layerScannerWithRealVcs(input)));
+
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "AgentSessionScanner jj repositories",
+  (it) => {
+    describeJj("secondary workspaces", () => {
+      it.effect("reports a non-colocated main workspace without a git marker", () =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
+          const codexHomePath = yield* makeTempDir("t3code-codex-home-");
+          const main = yield* makeTempDir("t3code-non-colocated-jj-");
+          yield* runJj(main, ["git", "init", "--no-colocate"]);
+          expect(yield* fileSystem.exists(path.join(main, ".git"))).toBe(false);
+          expect(yield* fileSystem.exists(path.join(main, ".jj", "repo", "store", "git"))).toBe(
+            true,
+          );
+          yield* writeTranscript({
+            filePath: path.join(claudeHomePath, "projects", "-non-colocated-jj", "a.jsonl"),
+            contents: claudeSessionLine(main),
+            mtimeMs: Date.parse("2026-01-01T00:00:00.000Z"),
+          });
+
+          const result = yield* runScanWithRealVcs({ claudeHomePath, codexHomePath });
+
+          // Non-colocated stores have no supported Git remote identity, but are still repositories.
+          expect(
+            result.candidates.map((candidate) => ({ path: candidate.path, git: candidate.git })),
+          ).toEqual([{ path: main, git: { remoteKey: null, repository: null } }]);
+        }),
+      );
+
+      it.effect("excludes user-added workspaces and aliases unless registered as projects", () =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
+          const codexHomePath = yield* makeTempDir("t3code-codex-home-");
+          const base = yield* makeTempDir("t3code-workspace-jj-");
+          const main = path.join(base, "project");
+          const workspace = path.join(base, "thread");
+
+          yield* fileSystem.makeDirectory(main, { recursive: true });
+          yield* createJjRepo(main);
+          yield* runGit(main, ["remote", "add", "origin", "git@github.com:pingdotgg/t3code.git"]);
+          yield* runJj(main, ["workspace", "add", workspace]);
+          const nested = path.join(workspace, "nested");
+          const alias = path.join(base, "alias");
+          yield* fileSystem.makeDirectory(nested);
+          yield* fileSystem.symlink(workspace, alias);
+
+          for (const [index, cwd] of [
+            workspace,
+            nested,
+            alias,
+            path.join(alias, "nested"),
+          ].entries()) {
+            yield* writeTranscript({
+              filePath: path.join(claudeHomePath, "projects", "-slug-jj", `${index}.jsonl`),
+              contents: claudeSessionLine(cwd),
+              mtimeMs: Date.parse("2026-01-01T00:00:00.000Z"),
+            });
+          }
+
+          expect((yield* runScanWithRealVcs({ claudeHomePath, codexHomePath })).candidates).toEqual(
+            [],
+          );
+          const result = yield* runScanWithRealVcs({
+            claudeHomePath,
+            codexHomePath,
+            importedWorkspaceRoots: [workspace],
+          });
+
+          expect(
+            result.candidates.map((candidate) => ({ path: candidate.path, git: candidate.git })),
+          ).toEqual([
+            {
+              path: workspace,
+              git: { remoteKey: "github.com/pingdotgg/t3code", repository: "pingdotgg/t3code" },
+            },
+          ]);
+        }),
+      );
+    });
+  },
+);

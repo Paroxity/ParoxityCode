@@ -16,9 +16,14 @@ import {
 } from "../vcs/JjRevset.ts";
 import type { JjVcsDriverShape } from "../vcs/JjVcsDriver.ts";
 import type * as VcsProcess from "../vcs/VcsProcess.ts";
-import { jjFailure, mapJjFailure } from "./JjFailure.ts";
-import { isOwnRewrite, resolveWorkspaceRefName, resolveUpstreamContext } from "./JjStatus.ts";
-import { isT3WorkspaceName } from "./JjWorkspaces.ts";
+import { isOwnRewrite, resolveUpstreamContext } from "./JjStatus.ts";
+import { isT3WorkspaceName, resolveWorkspaceRefName } from "../vcs/JjWorkspaceRef.ts";
+import { jjFailure, mapJjFailure } from "../vcs/JjProcess.ts";
+import {
+  type BookmarkConfigKey,
+  privateRemoteRefPrefix,
+  writeBookmarkConfig,
+} from "../vcs/JjGitMetadata.ts";
 
 const FETCH_TIMEOUT_MS = 60_000;
 const PUSH_TIMEOUT_MS = 120_000;
@@ -42,7 +47,7 @@ const capturePrivateRemoteRefs = Effect.fn("JjRemotes.capturePrivateRemoteRefs")
   remoteName: string,
   bookmark?: string,
 ) {
-  const prefix = `refs/t3/remotes/${encodeURIComponent(remoteName)}/`;
+  const prefix = privateRemoteRefPrefix(remoteName);
   const target = bookmark === undefined ? prefix : `${prefix}${bookmark}`;
   const result = yield* JjProcess.colocatedGitCommand(
     process,
@@ -130,7 +135,7 @@ export const writeBookmarkUpstreamConfig = Effect.fn("JjRemotes.writeBookmarkUps
   function* (
     process: VcsProcess.VcsProcess["Service"],
     input: {
-      readonly gitDir: string | null;
+      readonly gitDir: string;
       readonly cwd: string;
       readonly name: string;
       readonly remoteName: string;
@@ -138,23 +143,20 @@ export const writeBookmarkUpstreamConfig = Effect.fn("JjRemotes.writeBookmarkUps
       readonly importedPullRequest?: boolean;
     },
   ): Effect.fn.Return<void, never> {
-    const gitDir = input.gitDir;
-    if (gitDir === null) {
-      return;
-    }
-    const write = (key: string, value: string) =>
-      JjProcess.colocatedGitCommand(
+    const write = (key: BookmarkConfigKey, value: string) =>
+      writeBookmarkConfig(
         process,
         "JjRemotes.writeBookmarkUpstreamConfig",
-        { gitDir, cwd: input.cwd },
-        ["config", key, value],
-        { allowNonZeroExit: true, timeoutMs: 10_000 },
-      ).pipe(Effect.ignore);
+        { gitDir: input.gitDir, cwd: input.cwd },
+        input.name,
+        key,
+        value,
+      );
 
-    yield* write(`branch.${input.name}.remote`, input.remoteName);
-    yield* write(`branch.${input.name}.merge`, `refs/heads/${input.remoteBranch ?? input.name}`);
+    yield* write("remote", input.remoteName);
+    yield* write("merge", `refs/heads/${input.remoteBranch ?? input.name}`);
     if (input.importedPullRequest) {
-      yield* write(`branch.${input.name}.t3code-imported-pr-head`, "true");
+      yield* write("t3code-imported-pr-head", "true");
     }
   },
 );
@@ -164,7 +166,7 @@ export const trackRemoteBookmark = Effect.fn("JjRemotes.trackRemoteBookmark")(fu
   readonly process: VcsProcess.VcsProcess["Service"];
   readonly operation: string;
   readonly cwd: string;
-  readonly gitDir: string | null;
+  readonly gitDir: string;
   readonly remoteName: string;
   readonly name: string;
 }): Effect.fn.Return<void, GitCommandError> {

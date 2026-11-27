@@ -114,14 +114,6 @@ const withWorkspace = (scenario: Scenario) =>
     });
     const jjLayer = Layer.mock(JjVcsDriver.JjVcsDriver)({
       checkpoints: unusedJjCheckpoints,
-      capabilities: {
-        kind: "jj",
-        supportsWorktrees: true,
-        supportsBookmarks: true,
-        supportsAtomicSnapshot: true,
-        supportsPushDefaultRemote: false,
-        ignoreClassifier: "git-compatible-fallback",
-      },
       repoPaths: (cwd) =>
         Effect.gen(function* () {
           if (

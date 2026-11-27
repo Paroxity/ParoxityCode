@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { fakeTangled } from "./fakeTangled.ts";
+import { literalHostGuard } from "./publicHost.ts";
 import getDiff from "./fixtures/getDiff.json" with { type: "json" };
 import getRef from "./fixtures/getRef.json" with { type: "json" };
 import getRepoByRepoDid from "./fixtures/getRepoByRepoDid.json" with { type: "json" };
@@ -222,4 +223,57 @@ describe("TangledApi", () => {
       assert.deepStrictEqual(merge?.body, { style: "rebase" });
     }).pipe(Effect.provide(fake.layer));
   });
+
+  it.effect("sends no token, and no read, to a knot or spindle on a private address", () => {
+    const fake = fakeTangled({
+      ...core,
+      "org.tangled.repo.getRepoByRepoDid": {
+        ...getRepoByRepoDid,
+        knot: "127.0.0.1:5555",
+        value: { ...getRepoByRepoDid.value, spindle: "did:web:localhost%3A6555" },
+      },
+    });
+    return Effect.gen(function* () {
+      const api = yield* TangledApi.TangledApi;
+      const repository = yield* api.resolveRepository({ kind: "repo-did", repoDid: CORE });
+      const write = yield* api
+        .write({
+          service: "knot",
+          repository,
+          nsid: TangledApi.NSID.createRecord,
+          body: { collection: "org.tangled.feed.comment", record: {} },
+        })
+        .pipe(Effect.flip);
+      assert.include(write.message, "127.0.0.1 is not a public address");
+      const pipelines = yield* api
+        .queryPipelines({ repository, commits: ["c".repeat(40)] })
+        .pipe(Effect.flip);
+      assert.include(pipelines.message, "localhost is not a public address");
+      // Minting happens first, but the token never leaves the server.
+      assert.deepStrictEqual(
+        fake.requests.map((request) => request.host),
+        ["api.tangled.org", "api.tangled.org"],
+      );
+    }).pipe(Effect.provide(fake.layer));
+  });
+});
+
+describe("literalHostGuard", () => {
+  it.effect.each([
+    ["localhost", false],
+    ["knot.localhost", false],
+    ["10.0.0.8", false],
+    ["192.168.1.2", false],
+    ["169.254.169.254", false],
+    ["[::1]", false],
+    ["[fd00::1]", false],
+    ["knot1.tangled.sh", true],
+    ["1.1.1.1", true],
+    ["[2606:4700::1111]", true],
+  ] as const)("reads %s as public: %s", ([host, isPublic]) =>
+    literalHostGuard(host).pipe(
+      Effect.exit,
+      Effect.map((exit) => assert.strictEqual(exit._tag === "Success", isPublic)),
+    ),
+  );
 });

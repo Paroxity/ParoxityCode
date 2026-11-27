@@ -1,4 +1,3 @@
-import type { VcsTerminology } from "@t3tools/shared/vcs";
 import type {
   EnvironmentId,
   OrchestrationV2PendingBackgroundTask,
@@ -305,7 +304,6 @@ export function backgroundWorkNowItem(
 /** The local checkout moved off the branch this thread last ran on. */
 export function branchMismatchBannerItem(
   input: {
-    readonly terminology: VcsTerminology;
     readonly mismatchKey: string;
     readonly mismatch: { readonly threadBranch: string; readonly currentBranch: string };
     readonly restoreDisabled: boolean;
@@ -315,7 +313,6 @@ export function branchMismatchBannerItem(
   },
   resolve: MessageResolver = m,
 ): ComposerBannerStackItem {
-  const jj = input.terminology.kind === "jj";
   const { mismatch } = input;
   const branchTooltip = (
     <Tooltip>
@@ -340,35 +337,18 @@ export function branchMismatchBannerItem(
     icon: <GitBranchIcon />,
     title: (
       <span className="flex min-w-0 items-baseline gap-1.5">
-        {jj ? (
-          <T>
-            <span className="shrink-0 font-normal text-muted-foreground">
-              Bookmark changed from
-            </span>
-            <Var>{branchTooltip}</Var>
-          </T>
-        ) : (
-          <T>
-            <span className="shrink-0 font-normal text-muted-foreground">Branch changed from</span>
-            <Var>{branchTooltip}</Var>
-          </T>
-        )}
+        <T>
+          <span className="shrink-0 font-normal text-muted-foreground">Branch changed from</span>
+          <Var>{branchTooltip}</Var>
+        </T>
       </span>
     ),
     actions: (
       <Button size="xs" variant="ghost" disabled={input.restoreDisabled} onClick={input.onRestore}>
-        {input.restoring ? (
-          <T>Restoring...</T>
-        ) : jj ? (
-          <T>Restore bookmark</T>
-        ) : (
-          <T>Restore branch</T>
-        )}
+        {input.restoring ? <T>Restoring...</T> : <T>Restore branch</T>}
       </Button>
     ),
-    dismissLabel: jj
-      ? resolve(msg("Dismiss bookmark change notice"))
-      : resolve(msg("Dismiss branch change notice")),
+    dismissLabel: resolve(msg("Dismiss branch change notice")),
     onDismiss: input.onDismiss,
   };
 }

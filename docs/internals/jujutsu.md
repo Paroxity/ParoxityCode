@@ -1,5 +1,14 @@
 # Jujutsu
 
+## `vcs/` holds the primitives, `jj/` the workflows
+
+`apps/server/src/vcs/` owns jj's process runner and error mapping, driver, revsets, workspace
+names and colocated Git metadata helpers; `apps/server/src/jj/` builds workflows on them. Nothing in `vcs/`
+imports `jj/`, so the status broadcaster reaches jj only through the workflow surface
+(`GitWorkflowService.withRefreshScope`). Every server service shares one `JjVcsDriver` and
+`VcsDriverRegistry`, including storage cleanup and each WebSocket connection, so cache
+invalidation and per-repository locks reach the live server.
+
 ## Detection stops at the nearest marker
 
 [`findVcsMarkerRoot`](../../apps/server/src/vcs/JjRepo.ts) walks up and stops at the first `.jj` or
@@ -10,6 +19,8 @@ retain the same nearest-marker boundary.
 [`VcsProjectConfig`](../../apps/server/src/vcs/VcsProjectConfig.ts) resolves the repository's
 `.t3code/vcs.json` preference before driver detection. A Git pin selects Git without a notice;
 callers that only probe for jj get no handle for a Git pin, without spawning Git or jj.
+The ancestor walk for that file is cached per directory for a few seconds. A found file is
+rechecked on every use, but a newly created one takes effect only when the entry expires.
 A jj pin selects jj without automatic fallback; auto and unknown use nearest-marker detection and fallback.
 **Known gap:** jj automatically tracks this configuration file, so the preference can land in pushes.
 Missing, too-old, or broken jj falls back only to usable Git at that colocated root, with an
@@ -101,7 +112,8 @@ selected local bookmark and include empty remote commits. Automatic pull never a
 
 Status snapshot, segment, bookmark and workspace read failures propagate to the caller; they never
 become a clean working-copy result. The broadcaster's paired reads share lazy segment and workspace
-listings within one refresh, including cache misses and remote-triggered local refreshes. A post-pull
+listings within one refresh scope (`withRefreshScope`), including cache misses and remote-triggered
+local refreshes. A post-pull
 pair starts a new scope; reads never survive a mutation or leak into another refresh. Git retains its
 existing call order and options. Optional branch totals alone are absent for unrelated histories:
 only after a failed triple-dot diff does a successful no-common-ancestor diagnostic establish this.
@@ -177,33 +189,30 @@ refuses, with the same explanation. Neither path recommends enabling colocation,
 that checkout into a supported jj workspace. The Git fallback must resolve to the same workspace root.
 
 Fallback notices say when Git is detached: commits won't be on a branch; push needs a branch.
-Web renders the notice in ChatView's banner lane; mobile renders a dismissible thread notice.
-Dismissals persist per environment and repository and are invalidated when either notice text or
-reason changes. Unsupported reasons remain visible and cannot be dismissed.
+Web renders the notice in ChatView's banner lane. Dismissals persist per environment and repository
+and are invalidated when either notice text or reason changes. Unsupported reasons remain visible
+and cannot be dismissed. Mobile has no jj-specific UI: it shows Git wording and the server's
+refusals.
 
 Without usable colocated Git, detection still says jj. Operations refuse with a named
-`VcsStatusLocalResult.vcs.unsupportedReason`. Web and mobile disable source-control actions,
-Changes, bookmark/workspace selection and creation, and queued setup dispatch for this unsupported
+`VcsStatusLocalResult.vcs.unsupportedReason`. Web disables source-control actions, Changes,
+bookmark/workspace selection and creation, and queued setup dispatch for this unsupported
 descriptor only. Already-open dialogs recheck support before dispatch. Missing or loading status
-alone does not disable otherwise available controls. Mobile can leave an unsupported saved or default
-workspace selection for local chat; only entering workspace mode requires source-control support.
+alone does not disable otherwise available controls.
 
 Fresh drafts keep main's controls and subscription keys; they do not add a status stream to predict
 server support. Workspace creation refuses before allocating a workspace, and first send checks
-usability before creating a thread, claiming attachments, or allocating managed folders. Both clients
-show the existing unsupported reason from the refusal and retain the draft for correction. The
-first-send check uses the jj-only facade, leaving Git draft creation on its existing path.
+usability before creating a thread, claiming attachments, or allocating managed folders. The
+refusal carries the unsupported reason, and web retains the draft for correction. The first-send
+check uses the jj-only facade, leaving Git draft creation on its existing path.
 
 For an existing non-colocated repository, run `jj git colocation enable` in its main workspace.
 Publishing checks detection and usability before allocating a hosted repository. Git publishing
 keeps its original order and performs no jj probe.
 
-Client action rules live in `packages/client-runtime/src/state/gitActions.ts`. The explicit surface
-policy preserves web publishing and dirty-tree push behavior and mobile's clean-tree push rule,
-View PR entry and no-publishing behavior. Shared terminology objects supply system-specific copy;
-the web terminology subscription selects their stable identities instead of every status refresh.
-Selected-thread mobile controls select stable terminology, kind and unsupported-reason values from
-the existing full-status stream rather than opening a second local-status stream for the same checkout.
+Client action rules live in `packages/client-runtime/src/state/gitActions.ts`, where an
+unsupported reason disables the action. Shared terminology objects (`@t3tools/shared/vcs`) supply
+system-specific copy.
 
 Checkpoints are the exception. `checkpointsUsable` answers `false` there so
 [`CheckpointStore.supportsCheckpoints`](../../apps/server/src/checkpointing/CheckpointStore.ts) skips
@@ -214,7 +223,7 @@ every turn.
 
 An existing Git worktree (`.git` file, no `.jj`) keeps resolving as Git even when its project becomes colocated. Workspace removal dispatches from the target path first, with the project kind as a fallback when that path is missing or unclassifiable. Pruning routes by project kind. Idle jj workspaces use the shared cleanup rules; a tree-empty working-copy change is disposable only when its description is empty. Background fetch writes only `refs/t3/remotes`, never moving or conflicting tracked local bookmarks; subsequent candidates use those same refreshed refs. Cleanup snapshots tracked changes without auto-tracking new files, then separately inspects untracked and policy-relevant ignored files, including oversized files. Any `.jj` marker is preserved whenever detection does not select jj. Under the workspace lease, removal repeats the idle inspection, renames the workspace into a same-parent holding directory, and verifies its disk against a private Git index and its jj working-copy identity before forgetting it. Tracked edits are restored rather than snapshotted onto a stranded change. Successful removal forgets the workspace, prunes colocated Git registrations, invalidates caches and deletes the checked holding directory. Restoration failures preserve the holding directory instead of deleting unchecked files. Open terminals and live provider sessions remain blockers because existing open file descriptors can write even after a rename.
 
-Cleanup's holding interval and repo-wide jj pruning share a semaphore, so a normal resume cannot mistake a temporarily moved workspace for a missing one. Rename and rollback installation are interruption-masked. Ambiguous forget failures recheck registration before restoring; recovery failures are ordinary per-entry failures carrying the preserved directory, not sweep-killing defects.
+Cleanup's holding interval and that repository's jj pruning share the driver's per-repository prune lock, so a normal resume cannot mistake a temporarily moved workspace for a missing one. Rename and rollback installation are interruption-masked. Ambiguous forget failures recheck registration before restoring; recovery failures are ordinary per-entry failures carrying the preserved directory, not sweep-killing defects.
 
 T3 Code never runs `jj workspace update-stale`. It checks the rewritten commit out over files edited
 since the last snapshot, which can erase an agent's in-progress work. A stale workspace instead fails

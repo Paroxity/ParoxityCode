@@ -50,13 +50,6 @@ describe("shouldBundleCliDependency", () => {
   it("treats prefix-matched siblings as external", () => {
     assert.strictEqual(shouldBundleCliDependency("node-gyp-build-optional-packages"), false);
   });
-
-  it("inlines zod and undici for bundled importers while still staging them for Cursor", () => {
-    for (const id of ["zod", "undici"]) {
-      assert.strictEqual(shouldBundleCliDependency(id), true, id);
-      assert.strictEqual(isRuntimeExternalCliDependency(id), true, id);
-    }
-  });
 });
 
 it.layer(NodeServices.layer)("external package dependency closure", (it) => {

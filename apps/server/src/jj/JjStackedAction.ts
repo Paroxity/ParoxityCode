@@ -32,15 +32,14 @@ import * as JjProcess from "../vcs/JjProcess.ts";
 import { literalFilesetPath, localBookmarkRevset } from "../vcs/JjRevset.ts";
 import type { JjSegmentRow, JjVcsDriverShape } from "../vcs/JjVcsDriver.ts";
 import type * as VcsProcess from "../vcs/VcsProcess.ts";
-import { jjFailure, mapJjFailure } from "./JjFailure.ts";
 import type { JjRemoteOps } from "./JjRemotes.ts";
 import {
   computeAheadBehindCounts,
   readImportedUpstream,
-  resolveWorkspaceRefName,
   resolveUpstreamContext,
-  strandedSegmentRows,
 } from "./JjStatus.ts";
+import { resolveWorkspaceRefName, strandedSegmentRows } from "../vcs/JjWorkspaceRef.ts";
+import { jjFailure, mapJjFailure } from "../vcs/JjProcess.ts";
 
 const COMMIT_TIMEOUT_MS = 10 * 60_000;
 const DIFF_SUMMARY_MAX_BYTES = 64 * 1024;

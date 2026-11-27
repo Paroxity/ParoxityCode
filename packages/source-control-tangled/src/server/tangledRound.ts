@@ -81,14 +81,13 @@ export const submitRound = Effect.fn("TangledRound.submitRound")(function* (
     readonly head: string;
   },
 ) {
-  const rkey = input.ticketUri.slice(input.ticketUri.lastIndexOf("/") + 1);
   const receipt = yield* api.write({
     service: "knot",
     repository: input.target,
     nsid: TangledApi.NSID.submitPatch,
     body: {
       patch: {
-        ticket: rkey,
+        ticket: TangledApi.rkeyOf(input.ticketUri),
         base: { oid: input.base },
         head: { oid: input.head },
         sourceRepo: input.sourceRepoDid,
@@ -96,7 +95,7 @@ export const submitRound = Effect.fn("TangledRound.submitRound")(function* (
       },
     },
   });
-  yield* api.forgetRounds(input.ticketUri).pipe(
+  yield* api.forgetReads(input.ticketUri).pipe(
     Effect.andThen(api.listRounds(input.ticketUri)),
     Effect.repeat({
       until: (rounds) =>
@@ -107,6 +106,6 @@ export const submitRound = Effect.fn("TangledRound.submitRound")(function* (
     Effect.timeoutOption(INDEX_WAIT),
     Effect.ignore,
   );
-  yield* api.forgetRounds(input.ticketUri);
+  yield* api.forgetReads(input.ticketUri);
   return receipt;
 });

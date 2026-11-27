@@ -430,7 +430,7 @@ const layerPlatformServices = DocumentText.layer.pipe(
 const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 
 // The registry and workflow must reuse JjVcsDriver.layer so Effect shares their repository caches.
-const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
+const layerVcsDriverRegistry = VcsDriverRegistry.layer;
 
 const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.pipe(
   Layer.provideMerge(SourceControlBuiltInDrivers.layer),

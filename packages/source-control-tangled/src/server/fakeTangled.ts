@@ -5,6 +5,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
+import { literalHostGuard, PublicHostGuard } from "./publicHost.ts";
 import * as TangledApi from "./TangledApi.ts";
 import { TangledAuth, TangledAuthError, type TangledViewer } from "./TangledAuth.ts";
 
@@ -136,6 +137,7 @@ export function fakeTangled(
   const layer = TangledApi.layer.pipe(
     Layer.provideMerge(auth),
     Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
+    Layer.provide(Layer.succeed(PublicHostGuard, literalHostGuard)),
   );
   return {
     layer,

@@ -14,11 +14,10 @@ import { makeJjRefs, type JjRefsOps } from "./JjRefs.ts";
 import { makeJjRemotes } from "./JjRemotes.ts";
 import {
   defaultWorkspacePathForRef,
-  isT3WorkspaceName,
   makeJjWorkspaces,
-  workspaceNameForRef,
   type JjWorkspaceOps,
 } from "./JjWorkspaces.ts";
+import { isT3WorkspaceName, workspaceNameForRef } from "../vcs/JjWorkspaceRef.ts";
 
 interface WorkspacesFixture {
   readonly driver: JjVcsDriver.JjVcsDriverShape;
@@ -42,7 +41,7 @@ const withRepo = <A, E>(
 
       const remotes = makeJjRemotes({ driver, process });
       const refs = yield* makeJjRefs({ driver, process });
-      const ops = makeJjWorkspaces({
+      const ops = yield* makeJjWorkspaces({
         driver,
         process,
         fileSystem,
@@ -180,7 +179,7 @@ describeJj("JjWorkspaces.createWorktree", () => {
                 : first.process.run(input),
           };
           const remotes = makeJjRemotes({ driver: first.driver, process });
-          const ops = makeJjWorkspaces({
+          const ops = yield* makeJjWorkspaces({
             ...first,
             process,
             worktreesDir: first.path.join(first.base, "worktrees"),
@@ -296,7 +295,7 @@ describeJj("JjWorkspaces.createWorktree", () => {
                 ),
           };
           const remotes = makeJjRemotes({ driver: repo.driver, process });
-          const ops = makeJjWorkspaces({
+          const ops = yield* makeJjWorkspaces({
             ...repo,
             process,
             worktreesDir: repo.base,
@@ -336,11 +335,12 @@ describeJj("JjWorkspaces.createWorktree", () => {
             yield* runGit(repo.root, ["worktree", "list", "--porcelain"]),
             destination,
           );
-          const retried = yield* makeJjWorkspaces({
+          const retriedOps = yield* makeJjWorkspaces({
             ...repo,
             worktreesDir: repo.base,
             bookmarkTo: remotes.bookmarkTo,
-          }).createWorktree({
+          });
+          const retried = yield* retriedOps.createWorktree({
             cwd: repo.root,
             refName: "main",
             newRefName: "feat/interrupted-add",
@@ -743,7 +743,7 @@ describeJj("JjWorkspaces.createWorktree", () => {
             ).pipe(Effect.andThen(repo.process.run(input))),
         };
         const remotes = makeJjRemotes({ driver: repo.driver, process });
-        const ops = makeJjWorkspaces({
+        const ops = yield* makeJjWorkspaces({
           ...repo,
           process,
           worktreesDir: repo.base,
@@ -782,7 +782,7 @@ describeJj("JjWorkspaces.createWorktree", () => {
             ).pipe(Effect.andThen(repo.process.run(input))),
         };
         const remotes = makeJjRemotes({ driver: repo.driver, process });
-        const ops = makeJjWorkspaces({
+        const ops = yield* makeJjWorkspaces({
           ...repo,
           process,
           worktreesDir: repo.base,
@@ -876,7 +876,7 @@ describeJj("JjWorkspaces.createWorktree", () => {
             repo.process.run({ ...input, env: { ...input.env, GIT_ALLOW_PROTOCOL: "file" } }),
         };
         const remotes = makeJjRemotes({ driver: repo.driver, process });
-        const ops = makeJjWorkspaces({
+        const ops = yield* makeJjWorkspaces({
           ...repo,
           process,
           worktreesDir: base,

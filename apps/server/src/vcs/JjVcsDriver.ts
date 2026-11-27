@@ -13,8 +13,8 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import {
-  type VcsDriverCapabilities,
   type VcsError,
   VcsProcessOutputReadError,
   VcsProcessExitError,
@@ -84,7 +84,6 @@ export interface JjWorkspace {
 type VcsDriverService = VcsDriver.VcsDriver["Service"];
 
 export interface JjVcsDriverShape extends VcsDriverService {
-  readonly capabilities: VcsDriverCapabilities & { readonly kind: "jj" };
   readonly repoPaths: (cwd: string) => Effect.Effect<JjRepo.JjRepoPaths, VcsError>;
   readonly availability: (cwd: string) => Effect.Effect<JjAvailability.JjAvailability>;
   /** Always implemented here: `false` for a repository jj detects but cannot operate on. */
@@ -117,6 +116,15 @@ export interface JjVcsDriverShape extends VcsDriverService {
   readonly repoOperationKey: (paths: JjRepo.JjRepoPaths) => Effect.Effect<string, VcsError>;
   /** Drops this repo's cached default bookmark and remote names. */
   readonly invalidateRepoCaches: (cwd: string) => Effect.Effect<void, never>;
+  /**
+   * Serializes workspace pruning with storage cleanup's holding window for one repository, keyed
+   * by its main workspace root: cleanup temporarily moves a workspace, which pruning must not
+   * mistake for a deleted one. Not reentrant.
+   */
+  readonly withWorkspacePruneLock: <A, E, R>(
+    mainWorkspaceRoot: string,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>;
 }
 
 export class JjVcsDriver extends Context.Service<JjVcsDriver, JjVcsDriverShape>()(
@@ -313,14 +321,7 @@ const makeVcsDriverShape = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const availability = yield* JjAvailability.makeJjAvailability;
 
-  const capabilities = {
-    kind: "jj",
-    supportsWorktrees: true,
-    supportsBookmarks: true,
-    supportsAtomicSnapshot: true,
-    supportsPushDefaultRemote: false,
-    ignoreClassifier: "git-compatible-fallback",
-  } as const satisfies VcsDriverCapabilities & { readonly kind: "jj" };
+  const workspacePruneLocks = yield* KeyedLock.make<string>();
 
   const markerRoot = (cwd: string) => JjRepo.findVcsMarkerRoot(fileSystem, path, cwd);
   const resolvedPaths = new Map<
@@ -943,7 +944,6 @@ const makeVcsDriverShape = Effect.gen(function* () {
   });
 
   return {
-    capabilities,
     repoMetadataKey,
     repoOperationKey,
     execute,
@@ -978,6 +978,7 @@ const makeVcsDriverShape = Effect.gen(function* () {
     listRemoteNames,
     resolvePrimaryRemoteName,
     invalidateRepoCaches,
+    withWorkspacePruneLock: workspacePruneLocks.withLock,
   } satisfies JjVcsDriverShape;
 });
 

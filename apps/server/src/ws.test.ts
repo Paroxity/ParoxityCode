@@ -71,6 +71,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { Headers, HttpRouter, HttpServer } from "effect/http";
 import * as Context from "effect/Context";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as ProviderInstallationGate from "./provider/ProviderInstallationGate.ts";
 import * as Ws from "./ws.ts";
@@ -195,7 +196,6 @@ import * as ThreadCommandExecutor from "./orchestration-v2/ThreadCommandExecutor
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { projectIdentitiesDigest } from "./orchestration-v2/ShellStream.ts";
 import { ThreadLaunchError } from "./orchestration-v2/ThreadLaunchService.ts";
-import { jjFailure } from "./jj/JjFailure.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -210,6 +210,7 @@ import {
   WS_RPC_SERVER_OPTIONS,
   withLateConfigDiscovery,
 } from "./ws.ts";
+import { jjFailure } from "./vcs/JjProcess.ts";
 
 it.effect("preserves unsupported launch detail through the real error codec", () =>
   Effect.gen(function* () {
@@ -1056,6 +1057,8 @@ it.live.each([
               websocket: { perMessageDeflate: true },
             }),
           ),
+          // The socket layer reuses the server's registry for per-connection discovery.
+          Layer.provide(VcsDriverRegistry.layer),
           Layer.provide(services),
           Layer.provide(layerConfigSources),
         ),

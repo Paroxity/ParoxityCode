@@ -43,15 +43,6 @@ function handleFor(kind: "git" | "jj"): VcsDriverRegistry.VcsDriverHandle {
   return { kind } as unknown as VcsDriverRegistry.VcsDriverHandle;
 }
 
-const jjCapabilities = {
-  kind: "jj",
-  supportsWorktrees: false,
-  supportsBookmarks: true,
-  supportsAtomicSnapshot: true,
-  supportsPushDefaultRemote: false,
-  ignoreClassifier: "git-compatible-fallback",
-} as const satisfies JjVcsDriver.JjVcsDriverShape["capabilities"];
-
 function makeLayer(input: {
   readonly detect: VcsDriverRegistry.VcsDriverRegistry["Service"]["detect"];
   readonly resolve?: VcsDriverRegistry.VcsDriverRegistry["Service"]["resolve"];
@@ -73,7 +64,6 @@ function makeLayer(input: {
     Layer.provide(
       Layer.mock(JjVcsDriver.JjVcsDriver)({
         ...input.jjDriver,
-        capabilities: input.jjDriver?.capabilities ?? jjCapabilities,
         checkpoints: input.jjDriver?.checkpoints ?? unusedJjCheckpoints,
       }),
     ),
@@ -127,7 +117,7 @@ describeJj("GitWorkflowService real jj currentRefName", () => {
     withJjRepo({ prefix: "t3-jj-unreadable-pointer-", seed: true }, (repo) =>
       Effect.gen(function* () {
         const remotes = makeJjRemotes({ driver: repo.driver, process: repo.process });
-        const workspaces = makeJjWorkspaces({
+        const workspaces = yield* makeJjWorkspaces({
           driver: repo.driver,
           process: repo.process,
           fileSystem: repo.fileSystem,
@@ -186,7 +176,7 @@ describeJj("GitWorkflowService real jj currentRefName", () => {
       withJjRepo({ prefix: "t3-jj-workspace-validation-", seed: true }, (repo) =>
         Effect.gen(function* () {
           const remotes = makeJjRemotes({ driver: repo.driver, process: repo.process });
-          const workspaces = makeJjWorkspaces({
+          const workspaces = yield* makeJjWorkspaces({
             driver: repo.driver,
             process: repo.process,
             fileSystem: repo.fileSystem,
@@ -837,10 +827,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
       const workflow = yield* GitWorkflowService.GitWorkflowService;
       assert.equal(yield* workflow.hasRefNamed({ cwd: "/jj-repo", refName: "root()" }), false);
       assert.equal(yield* workflow.hasRefNamed({ cwd: "/jj-repo", refName: "topic/*" }), false);
-      expect(hasRefNamed).toHaveBeenCalledExactlyOnceWith({
-        cwd: "/jj-repo",
-        refName: "root()",
-      });
+      // Arms also receive the detected handle.
+      expect(hasRefNamed).toHaveBeenCalledOnce();
+      expect(hasRefNamed).toHaveBeenCalledWith(
+        { cwd: "/jj-repo", refName: "root()" },
+        expect.objectContaining({ kind: "jj" }),
+      );
     }).pipe(
       Effect.provide(
         makeLayer({
@@ -866,8 +858,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
       const workflow = yield* GitWorkflowService.GitWorkflowService;
       assert.deepEqual(yield* workflow.renameBranch(gitInput), { branch: "renamed" });
       assert.deepEqual(yield* workflow.renameBranch(jjInput), { branch: "renamed" });
-      expect(gitRename).toHaveBeenCalledExactlyOnceWith(gitInput);
-      expect(jjRename).toHaveBeenCalledExactlyOnceWith(jjInput);
+      expect(gitRename).toHaveBeenCalledOnce();
+      expect(gitRename).toHaveBeenCalledWith(gitInput, expect.objectContaining({ kind: "git" }));
+      expect(jjRename).toHaveBeenCalledOnce();
+      expect(jjRename).toHaveBeenCalledWith(jjInput, expect.objectContaining({ kind: "jj" }));
     }).pipe(
       Effect.provide(
         makeLayer({
@@ -1225,7 +1219,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
           Layer.provide(Layer.mock(JjWorkflow.JjWorkflow)({})),
           Layer.provide(
             Layer.mock(JjVcsDriver.JjVcsDriver)({
-              capabilities: jjCapabilities,
               checkpoints: unusedJjCheckpoints,
             }),
           ),
@@ -1257,7 +1250,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
           Layer.provide(Layer.mock(JjWorkflow.JjWorkflow)({})),
           Layer.provide(
             Layer.mock(JjVcsDriver.JjVcsDriver)({
-              capabilities: jjCapabilities,
               checkpoints: unusedJjCheckpoints,
             }),
           ),
