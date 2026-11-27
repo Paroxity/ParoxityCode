@@ -138,6 +138,15 @@ jobs:
           T3CODE_RELAY_URL: ${{ needs.prepare.outputs.relay_url }}
         run: vp run build:desktop
 
+      # As in release.yml: upload-artifact skips hidden files, and release-desktop.yml restores this one.
+      - name: Stage web asset manifest
+        shell: bash
+        run: |
+          manifest=apps/server/dist/client/.vite/manifest.json
+          if [[ -f "$manifest" ]]; then
+            cp "$manifest" apps/server/dist/client/vite-manifest.release.json
+          fi
+
       # Same layout as release.yml's js-bundle, so release-desktop.yml packages it unchanged.
       - name: Upload JS bundle
         uses: actions/upload-artifact@v7

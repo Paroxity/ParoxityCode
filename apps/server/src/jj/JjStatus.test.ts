@@ -1257,7 +1257,8 @@ describeJj("JjStatus broadcaster refresh reads", () => {
                 invalidateLocalStatus: repo.driver.invalidateRepoCaches,
                 invalidateRemoteStatus: () => Effect.void,
                 readRefSnapshot: () => Effect.succeed(null),
-                readLocalStatusRefSnapshot: () => Effect.succeed(null),
+                readStatusRefreshRefs: () => Effect.succeed(null),
+                readStatusPoll: () => Effect.succeed(null),
               }),
             ),
             Layer.provide(

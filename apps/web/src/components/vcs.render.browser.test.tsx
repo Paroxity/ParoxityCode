@@ -22,6 +22,7 @@ vi.mock("@t3tools/client-runtime/state/vcs", () => ({
   createVcsStatusRevalidationAtomFamily: () => ({}),
 }));
 vi.mock("../connection/runtime", () => ({ connectionAtomRuntime: {} }));
+vi.mock("../state/relay", () => ({ relayEnvironmentDiscovery: {} }));
 vi.mock("../connection/catalog", async () => {
   const { Atom } = await import("effect/reactivity");
   return {

@@ -172,7 +172,8 @@ export class GitWorkflowService extends Context.Service<
       } | null,
       GitManagerServiceError
     >;
-    readonly readLocalStatusRefSnapshot: GitVcsDriver.GitVcsDriver["Service"]["readLocalStatusRefSnapshot"];
+    readonly readStatusRefreshRefs: GitVcsDriver.GitVcsDriver["Service"]["readStatusRefreshRefs"];
+    readonly readStatusPoll: GitVcsDriver.GitVcsDriver["Service"]["readStatusPoll"];
     readonly readRefSnapshot: GitVcsDriver.GitVcsDriver["Service"]["readRefSnapshot"];
     /** The checkout's own HEAD file, inside a linked worktree's admin directory when there is one. */
     readonly headPath: (cwd: string) => Effect.Effect<string | null, never>;
@@ -599,11 +600,20 @@ export const make = Effect.gen(function* () {
     invalidateLocalStatus: invalidate("invalidateLocalStatus"),
     invalidateRemoteStatus: invalidate("invalidateRemoteStatus"),
     // jj status does not follow Git refs or HEAD, so jj repositories always refresh in full.
-    readLocalStatusRefSnapshot: Effect.fn("GitWorkflowService.readLocalStatusRefSnapshot")(
-      function (cwd) {
+    readStatusRefreshRefs: Effect.fn("GitWorkflowService.readStatusRefreshRefs")(function (cwd) {
+      return detectForFacade(cwd).pipe(
+        Effect.flatMap((handle) =>
+          handle?.kind === "jj" ? Effect.succeed(null) : git.readStatusRefreshRefs(cwd),
+        ),
+      );
+    }),
+    readStatusPoll: Effect.fn("GitWorkflowService.readStatusPoll")(
+      function (cwd, branch, refreshUpstream) {
         return detectForFacade(cwd).pipe(
           Effect.flatMap((handle) =>
-            handle?.kind === "jj" ? Effect.succeed(null) : git.readLocalStatusRefSnapshot(cwd),
+            handle?.kind === "jj"
+              ? Effect.succeed(null)
+              : git.readStatusPoll(cwd, branch, refreshUpstream),
           ),
         );
       },
