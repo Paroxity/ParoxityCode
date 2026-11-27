@@ -329,6 +329,23 @@ it("compares against an explicit ref instead of the closest remote main", async 
   assert.strictEqual(result.ref, "origin/main");
 });
 
+it("compares against a remote default branch when it is closer than main", async () => {
+  using project = fixture({ origin: "A" });
+  NodeChildProcess.execFileSync(
+    "git",
+    ["update-ref", "refs/remotes/origin/paroxity/stable", project.commits.B!],
+    { cwd: project.root, env },
+  );
+  NodeChildProcess.execFileSync(
+    "git",
+    ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/paroxity/stable"],
+    { cwd: project.root, env },
+  );
+  const result = await compare(project.root, Option.none());
+  assert.strictEqual(result.base, project.commits.B);
+  assert.strictEqual(result.ref, "origin/paroxity/stable");
+});
+
 it("lists the ignored inputs that main's pathspecs list, without entering node_modules", async () => {
   using project = fixture({});
   const git = (...args: Array<string>) =>

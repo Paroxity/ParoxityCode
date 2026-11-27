@@ -195,12 +195,30 @@ export const comparisonBase = Effect.fn("checkChanged.comparisonBase")(function*
   root: string,
   explicitRef: Option.Option<string>,
 ) {
-  const candidates = Option.isSome(explicitRef)
-    ? [{ ref: explicitRef.value, rev: explicitRef.value }]
-    : (yield* gitLines(root, ["remote"])).map((name) => ({
-        ref: name + "/main",
-        rev: "refs/remotes/" + name + "/main",
-      }));
+  let candidates: Array<{ ref: string; rev: string }>;
+  if (Option.isSome(explicitRef)) {
+    candidates = [{ ref: explicitRef.value, rev: explicitRef.value }];
+  } else {
+    const remotes = yield* gitLines(root, ["remote"]);
+    const seen = new Set<string>();
+    candidates = [];
+    const add = (ref: string, rev: string) => {
+      if (seen.has(rev)) return;
+      seen.add(rev);
+      candidates.push({ ref, rev });
+    };
+    for (const name of remotes) {
+      const head = yield* git(root, ["symbolic-ref", "--quiet", `refs/remotes/${name}/HEAD`]).pipe(
+        Effect.map((stdout) => stdout.toString().trim()),
+        Effect.orElseSucceed(() => ""),
+      );
+      if (head.startsWith("refs/remotes/")) {
+        add(head.slice("refs/remotes/".length), head);
+      }
+      add(name + "/paroxity/stable", "refs/remotes/" + name + "/paroxity/stable");
+      add(name + "/main", "refs/remotes/" + name + "/main");
+    }
+  }
   let closest: { ref: string; base: string; ahead: number } | undefined;
   for (const { ref, rev } of candidates) {
     const base = yield* git(root, ["merge-base", "HEAD", rev]).pipe(

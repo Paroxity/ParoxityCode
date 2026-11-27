@@ -33,8 +33,8 @@ The fork also ships its own iOS app through TestFlight; see [Mobile app](#mobile
 These trip up agents that follow upstream's habits:
 
 - **Base branch.** Open PRs against `paroxity/stable` on `Paroxity/ParoxityCode`. In T3 worktrees that repository is the `origin` remote; the update steps below call it `fork`. Never open PRs on `pingdotgg/t3code`.
-- **CI never finishes.** Most jobs run on Blacksmith runners, which the fork doesn't have, so they stay queued forever. "Agent context budget" fails because it measures against upstream `main`. Run `vp run check:changed origin/paroxity/stable` and the affected tests locally instead. Merge with `gh pr merge --squash --admin` and cancel the queued runs. Without the base argument, `check:changed` diffs against upstream and fails with `spawn E2BIG`.
-- **Upstream-only workflows.** The `Mobile EAS *` workflows and `release.yml` are gated on `pingdotgg/t3code` and never run here. EAS builds go to upstream's Expo project and Apple team, so don't use `eas build` or `eas submit` for the fork.
+- **CI.** `ci.yml` runs on GitHub-hosted runners (`ubuntu-24.04` / `macos-latest`) rather than upstream's Blacksmith runners, and upstream-only preview, triage, and release workflows are disabled on `Paroxity/ParoxityCode`. `vp run check:changed` resolves the remote default branch (`origin/paroxity/stable`) automatically.
+- **Upstream-only workflows.** The `Mobile EAS *` workflows and `release.yml` are disabled here and gated on `pingdotgg/t3code`. EAS builds go to upstream's Expo project and Apple team, so don't use `eas build` or `eas submit` for the fork.
 - **Tools off `PATH`.** Agent shells may not load a login profile. `vp` lives in `~/.vite-plus/bin`. This Mac has no CocoaPods or Homebrew, so run anything that needs `pod`, such as `vp run mobile:install` after a native change, inside `nix shell nixpkgs#cocoapods -c …`.
 
 ## Product name
