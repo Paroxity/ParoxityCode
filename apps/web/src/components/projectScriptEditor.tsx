@@ -7,7 +7,6 @@ import {
   type ProjectScriptIcon,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
-import { GIT_VCS_TERMINOLOGY } from "@t3tools/shared/vcs";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -140,7 +139,6 @@ export function editorRequestForScript(
 export function ProjectScriptEditorDialog({
   environmentId,
   editScope = AuthOrchestrationOperateScope,
-  workspaceNoun = GIT_VCS_TERMINOLOGY.workspaceNoun,
   request,
   scripts,
   onSubmit,
@@ -149,7 +147,6 @@ export function ProjectScriptEditorDialog({
 }: {
   environmentId: EnvironmentId;
   editScope?: typeof AuthOrchestrationOperateScope | typeof AuthSettingsWriteScope;
-  workspaceNoun?: string;
   request: ProjectScriptEditorRequest | null;
   scripts: ReadonlyArray<ProjectScript>;
   onSubmit: (
@@ -204,7 +201,6 @@ export function ProjectScriptEditorDialog({
               key={shown.key}
               environmentId={environmentId}
               editScope={editScope}
-              workspaceNoun={workspaceNoun}
               request={shown.request}
               scripts={scripts}
               validationError={validationError}
@@ -262,7 +258,6 @@ export function ProjectScriptEditorDialog({
 function ProjectScriptEditorForm({
   environmentId,
   editScope,
-  workspaceNoun,
   request,
   scripts,
   validationError,
@@ -273,7 +268,6 @@ function ProjectScriptEditorForm({
 }: {
   environmentId: EnvironmentId;
   editScope: typeof AuthOrchestrationOperateScope | typeof AuthSettingsWriteScope;
-  workspaceNoun: string;
   request: ProjectScriptEditorRequest;
   scripts: ReadonlyArray<ProjectScript>;
   validationError: string | null;
@@ -548,11 +542,7 @@ function ProjectScriptEditorForm({
             </div>
             <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
               <span>
-                {workspaceNoun === "workspace" ? (
-                  <T>Run automatically on workspace creation</T>
-                ) : (
-                  <T>Run automatically on worktree creation</T>
-                )}
+                <T>Run automatically on worktree creation</T>
               </span>
               <Switch
                 checked={runOnWorktreeCreate}
@@ -575,11 +565,7 @@ function ProjectScriptEditorForm({
             </label>
             <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
               <span>
-                {workspaceNoun === "workspace" ? (
-                  <T>Run in the thread's workspace when the thread settles</T>
-                ) : (
-                  <T>Run in the thread's worktree when the thread settles</T>
-                )}
+                <T>Run in the thread's worktree when the thread settles</T>
               </span>
               <Switch
                 checked={runOnSettle}

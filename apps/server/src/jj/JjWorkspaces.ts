@@ -1,6 +1,5 @@
-// @effect-diagnostics nodeBuiltinImport:off - the three exported name/path helpers are pure, so
-// they cannot take the Path service; the operations below use the injected one.
-import * as NodeCrypto from "node:crypto";
+// @effect-diagnostics nodeBuiltinImport:off - the exported path helper is pure, so it cannot take
+// the Path service; the operations below use the injected one.
 import * as NodePath from "node:path";
 
 import * as Effect from "effect/Effect";
@@ -8,7 +7,6 @@ import * as Exit from "effect/Exit";
 import type * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
-import * as Semaphore from "effect/Semaphore";
 
 import { T3_PROJECT_FILE_NAME } from "@t3tools/contracts";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -20,42 +18,23 @@ import type { JjRepoPaths } from "../vcs/JjRepo.ts";
 import { bookmarkNameArgument, refNameToRevset, splitRemoteRefName } from "../vcs/JjRevset.ts";
 import type { JjVcsDriverShape } from "../vcs/JjVcsDriver.ts";
 import type * as VcsProcess from "../vcs/VcsProcess.ts";
-import { jjFailure, mapJjFailure } from "./JjFailure.ts";
 import {
   assertBookmarkUsable,
   trackRemoteBookmark,
   writeBookmarkUpstreamConfig,
   type JjRemoteOps,
 } from "./JjRemotes.ts";
-import { resolveWorkspaceRefName, strandedSegmentRows } from "./JjStatus.ts";
+import {
+  bookmarkDigest,
+  isT3WorkspaceName,
+  resolveWorkspaceRefName,
+  strandedSegmentRows,
+  workspaceNameForRef,
+} from "../vcs/JjWorkspaceRef.ts";
+import { jjFailure, mapJjFailure } from "../vcs/JjProcess.ts";
+import { writeBookmarkConfig } from "../vcs/JjGitMetadata.ts";
 
-const WORKSPACE_NAME_PREFIX = "t3-";
-const WORKSPACE_DIGEST_LENGTH = 8;
 const WORKSPACE_ADD_TIMEOUT_MS = 300_000;
-const WORKSPACE_NAME_PATTERN = new RegExp(
-  `^${WORKSPACE_NAME_PREFIX}.+-[0-9a-f]{${WORKSPACE_DIGEST_LENGTH}}$`,
-);
-
-function bookmarkDigest(refName: string): string {
-  return NodeCrypto.createHash("sha256")
-    .update(refName)
-    .digest("hex")
-    .slice(0, WORKSPACE_DIGEST_LENGTH);
-}
-
-/**
- * `t3-<bookmark with "/" → "-">-<8 hex of sha256(bookmark)>`. The digest is not decoration:
- * without it `a/b` and `a-b` both map to `t3-a-b`, the second `jj workspace add` fails on the
- * duplicate name, and `listRefs` attributes one workspace root to two bookmarks.
- */
-export function workspaceNameForRef(refName: string): string {
-  return `${WORKSPACE_NAME_PREFIX}${refName.replaceAll("/", "-")}-${bookmarkDigest(refName)}`;
-}
-
-/** True for any name {@link workspaceNameForRef} could have produced. Never true for `default`. */
-export function isT3WorkspaceName(name: string): boolean {
-  return WORKSPACE_NAME_PATTERN.test(name);
-}
 
 /**
  * `<worktreesDir>/<repoName>/<refName with "/" → "-">`, the layout
@@ -88,15 +67,14 @@ export type JjWorkspaceOps = Pick<
   "createWorktree" | "removeWorktree" | "pruneWorktrees"
 >;
 
-// Cleanup temporarily moves workspace paths; repo-wide pruning must not observe that hold.
-export const workspacePruneLock = Semaphore.makeUnsafe(1);
-
-export const makeJjWorkspaces = (deps: JjWorkspaceOpsDeps): JjWorkspaceOps => {
+export const makeJjWorkspaces = Effect.fn("JjWorkspaces.makeJjWorkspaces")(function* (
+  deps: JjWorkspaceOpsDeps,
+): Effect.fn.Return<JjWorkspaceOps> {
   const { bookmarkTo, driver, fileSystem, path, process, worktreesDir } = deps;
 
   const run = JjProcess.jjRunner(process);
   // Serialize each repository's adds and rollback without blocking unrelated repositories.
-  const createLocks = Effect.runSync(KeyedLock.make<string>());
+  const createLocks = yield* KeyedLock.make<string>();
 
   const canonicalize = Effect.fn("JjWorkspaces.canonicalize")(function* (value: string) {
     let ancestor = path.resolve(value);
@@ -248,8 +226,9 @@ export const makeJjWorkspaces = (deps: JjWorkspaceOpsDeps): JjWorkspaceOps => {
       yield* forgetWorkspace(operation, paths.mainWorkspaceRoot, workspaceName).pipe(Effect.ignore);
       yield* removeIfOnlyJjMetadata(existingRoot);
       // Forget cannot remove Git's registration when the directory was already deleted.
-      yield* pruneGitWorktrees(operation, paths.gitDir, paths.mainWorkspaceRoot).pipe(
-        workspacePruneLock.withPermit,
+      yield* driver.withWorkspacePruneLock(
+        paths.mainWorkspaceRoot,
+        pruneGitWorktrees(operation, paths.gitDir, paths.mainWorkspaceRoot),
       );
     }
 
@@ -530,8 +509,9 @@ export const makeJjWorkspaces = (deps: JjWorkspaceOpsDeps): JjWorkspaceOps => {
           .exists(input.path)
           .pipe(mapJjFailure(operation, input.cwd, `Could not inspect ${input.path}.`));
         if (!directoryExists) {
-          yield* pruneGitWorktrees(operation, paths.gitDir, paths.mainWorkspaceRoot).pipe(
-            workspacePruneLock.withPermit,
+          yield* driver.withWorkspacePruneLock(
+            paths.mainWorkspaceRoot,
+            pruneGitWorktrees(operation, paths.gitDir, paths.mainWorkspaceRoot),
           );
           return;
         }
@@ -558,8 +538,9 @@ export const makeJjWorkspaces = (deps: JjWorkspaceOpsDeps): JjWorkspaceOps => {
           Effect.ignore,
         );
         yield* driver.invalidateRepoCaches(paths.mainWorkspaceRoot);
-        yield* pruneGitWorktrees(operation, paths.gitDir, paths.mainWorkspaceRoot).pipe(
-          workspacePruneLock.withPermit,
+        yield* driver.withWorkspacePruneLock(
+          paths.mainWorkspaceRoot,
+          pruneGitWorktrees(operation, paths.gitDir, paths.mainWorkspaceRoot),
         );
         return;
       }
@@ -618,37 +599,41 @@ export const makeJjWorkspaces = (deps: JjWorkspaceOpsDeps): JjWorkspaceOps => {
       const paths = yield* driver
         .ensureUsable(operation, input.cwd)
         .pipe(mapJjFailure(operation, input.cwd, "This Jujutsu repository cannot be used."));
-      const workspaces = yield* driver
-        .listWorkspaces(input.cwd)
-        .pipe(mapJjFailure(operation, input.cwd, "Could not list Jujutsu workspaces."));
+      yield* driver.withWorkspacePruneLock(
+        paths.mainWorkspaceRoot,
+        Effect.gen(function* () {
+          const workspaces = yield* driver
+            .listWorkspaces(input.cwd)
+            .pipe(mapJjFailure(operation, input.cwd, "Could not list Jujutsu workspaces."));
 
-      for (const workspace of workspaces) {
-        // The name filter keeps a user's own workspace on an unmounted volume registered; only
-        // directories T3 created are reclaimed. `default` can never match.
-        if (!isT3WorkspaceName(workspace.name)) {
-          continue;
-        }
-        const present = yield* fileSystem
-          .exists(workspace.root)
-          .pipe(Effect.orElseSucceed(() => false));
-        if (present) {
-          continue;
-        }
-        yield* forgetWorkspace(operation, paths.mainWorkspaceRoot, workspace.name).pipe(
-          Effect.ignore,
-        );
-        yield* driver.invalidateRepoCaches(paths.mainWorkspaceRoot);
-      }
+          for (const workspace of workspaces) {
+            // The name filter keeps a user's own workspace on an unmounted volume registered; only
+            // directories T3 created are reclaimed. `default` can never match.
+            if (!isT3WorkspaceName(workspace.name)) {
+              continue;
+            }
+            const present = yield* fileSystem
+              .exists(workspace.root)
+              .pipe(Effect.orElseSucceed(() => false));
+            if (present) {
+              continue;
+            }
+            yield* forgetWorkspace(operation, paths.mainWorkspaceRoot, workspace.name).pipe(
+              Effect.ignore,
+            );
+            yield* driver.invalidateRepoCaches(paths.mainWorkspaceRoot);
+          }
 
-      // A colocated repository can hold `git worktree` admin entries created before jj detection
-      // was enabled, and nothing else reclaims them once the project routes to the jj arm.
-      yield* pruneGitWorktrees(operation, paths.gitDir, paths.mainWorkspaceRoot);
+          // A colocated repository can hold `git worktree` admin entries created before jj detection
+          // was enabled, and nothing else reclaims them once the project routes to the jj arm.
+          yield* pruneGitWorktrees(operation, paths.gitDir, paths.mainWorkspaceRoot);
+        }),
+      );
     },
-    workspacePruneLock.withPermit,
   );
 
   return { createWorktree, removeWorktree, pruneWorktrees };
-};
+});
 
 /**
  * The per-thread PR base and upstream, written where git records them. A jj bookmark is
@@ -658,7 +643,7 @@ export const makeJjWorkspaces = (deps: JjWorkspaceOpsDeps): JjWorkspaceOps => {
  */
 const writeWorktreeGitConfig = Effect.fn("JjWorkspaces.writeWorktreeGitConfig")(function* (input: {
   readonly process: VcsProcess.VcsProcess["Service"];
-  readonly gitDir: string | null;
+  readonly gitDir: string;
   readonly cwd: string;
   readonly targetRef: string;
   readonly upstreamRemoteName?: string;
@@ -666,13 +651,11 @@ const writeWorktreeGitConfig = Effect.fn("JjWorkspaces.writeWorktreeGitConfig")(
   readonly baseRefName?: string;
   readonly comparisonRef?: string;
 }): Effect.fn.Return<void, never> {
-  const gitDir = input.gitDir;
-  if (gitDir === null) {
-    return;
-  }
+  const operation = "JjWorkspaces.writeWorktreeGitConfig";
+  const paths = { gitDir: input.gitDir, cwd: input.cwd };
   if (input.upstreamRemoteName !== undefined) {
     yield* writeBookmarkUpstreamConfig(input.process, {
-      gitDir,
+      gitDir: input.gitDir,
       cwd: input.cwd,
       name: input.targetRef,
       remoteName: input.upstreamRemoteName,
@@ -681,20 +664,22 @@ const writeWorktreeGitConfig = Effect.fn("JjWorkspaces.writeWorktreeGitConfig")(
   if (input.newRefName === undefined || input.baseRefName === undefined) {
     return;
   }
-  yield* JjProcess.colocatedGitCommand(
+  yield* writeBookmarkConfig(
     input.process,
-    "JjWorkspaces.writeWorktreeGitConfig",
-    { gitDir, cwd: input.cwd },
-    ["config", `branch.${input.newRefName}.gh-merge-base`, input.baseRefName],
-    { allowNonZeroExit: true, timeoutMs: 10_000 },
-  ).pipe(Effect.ignore);
+    operation,
+    paths,
+    input.newRefName,
+    "gh-merge-base",
+    input.baseRefName,
+  );
   if (input.comparisonRef !== undefined) {
-    yield* JjProcess.colocatedGitCommand(
+    yield* writeBookmarkConfig(
       input.process,
-      "JjWorkspaces.writeWorktreeGitConfig",
-      { gitDir, cwd: input.cwd },
-      ["config", `branch.${input.newRefName}.t3-merge-base-ref`, input.comparisonRef],
-      { allowNonZeroExit: true, timeoutMs: 10_000 },
-    ).pipe(Effect.ignore);
+      operation,
+      paths,
+      input.newRefName,
+      "t3-merge-base-ref",
+      input.comparisonRef,
+    );
   }
 });

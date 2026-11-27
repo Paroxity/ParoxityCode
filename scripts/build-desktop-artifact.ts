@@ -2786,12 +2786,12 @@ export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
   return resolveWebAssetBrandForChannel(resolveDesktopUpdateChannel(version));
 }
 
-// Fork: every channel, stable included, ships the nightly icon.
-export function resolveDesktopBuildIconAssets(): DesktopBuildIconAssets {
+// Fork: every channel, stable included, ships the Paroxity icon.
+export function resolveDesktopBuildIconAssets(_version: string): DesktopBuildIconAssets {
   return {
-    macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
-    linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
-    windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
+    macIconPng: BRAND_ASSET_PATHS.paroxityMacIconPng,
+    linuxIconPng: BRAND_ASSET_PATHS.paroxityLinuxIconPng,
+    windowsIconIco: BRAND_ASSET_PATHS.paroxityWindowsIconIco,
   };
 }
 
@@ -3759,7 +3759,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
 
   const appVersion =
     options.version ?? resolveTaggedSourceVersion(repoRoot, serverPackageJson.version);
-  const iconAssets = resolveDesktopBuildIconAssets();
+  const iconAssets = resolveDesktopBuildIconAssets(appVersion);
   const commitHash = yield* resolveGitCommitHash(repoRoot);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({

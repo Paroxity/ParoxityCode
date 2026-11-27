@@ -32,10 +32,12 @@ import {
 import * as ServerConfig from "./config.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+import * as JjVcsDriver from "./vcs/JjVcsDriver.ts";
+import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
+import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as TaskFolders from "./workspace/TaskFolders.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
-import { workspaceNameForRef } from "./jj/JjWorkspaces.ts";
 import * as Settings from "./serverSettings.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
@@ -46,8 +48,15 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import { CodexProviderCapabilitiesV2 } from "./orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import type { runJj } from "./vcs/testing/JjTestSupport.ts";
+import { workspaceNameForRef } from "./vcs/JjWorkspaceRef.ts";
 
 const encodeSessionPayload = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+// One registry, jj driver and process runner per fixture, as the server shares them.
+const cleanupVcsLayer = VcsDriverRegistry.layer.pipe(
+  Layer.provideMerge(JjVcsDriver.layer),
+  Layer.provideMerge(VcsProcess.layer),
+);
 
 export const NOW_MS = Date.parse("2026-06-10T12:00:00.000Z");
 export const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -126,6 +135,8 @@ export const cleanupFixture = (
   options?: {
     readonly sqlOverride?: SqlClient.SqlClient;
     readonly runJj?: typeof runJj;
+    /** Replaces repository detection, for cases where it must not select jj. */
+    readonly detect?: VcsDriverRegistry.VcsDriverRegistry["Service"]["detect"];
   },
 ) =>
   Effect.gen(function* () {
@@ -187,7 +198,18 @@ export const cleanupFixture = (
     };
     let events: Stream.Stream<OrchestrationV2DomainEvent> = Stream.empty;
     const activated = yield* Deferred.make<void>();
-    const context = yield* Layer.build(StorageCleanup.layer).pipe(
+    const context = yield* Layer.build(
+      StorageCleanup.layer.pipe(
+        Layer.provide(
+          options?.detect === undefined
+            ? cleanupVcsLayer
+            : Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({ detect: options.detect }).pipe(
+                Layer.merge(JjVcsDriver.layer),
+                Layer.provideMerge(VcsProcess.layer),
+              ),
+        ),
+      ),
+    ).pipe(
       Effect.provideService(GitVcsDriver.GitVcsDriver, {
         ...git,
         execute: (input) =>

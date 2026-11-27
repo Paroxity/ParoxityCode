@@ -77,6 +77,29 @@ describe("jj wording and unsupported repositories", () => {
     );
   });
 
+  it("blocks Create PR while the jj working copy has changes the push would leave out", () => {
+    const dirty = status({
+      hasWorkingTreeChanges: true,
+      aheadCount: 1,
+      aheadOfDefaultCount: 1,
+      vcs: { kind: "jj" },
+    });
+    const pr = buildMenuItems(dirty, false).find((item) => item.id === "pr")!;
+    assert.isTrue(pr.disabled);
+    assert.equal(
+      getMenuActionDisabledReason({
+        item: pr,
+        gitStatus: dirty,
+        isBusy: false,
+        hasPrimaryRemote: true,
+      }),
+      "Commit local changes before pushing.",
+    );
+    // Git pushes the branch's commits, so the same state stays creatable.
+    const gitDirty = status({ hasWorkingTreeChanges: true, aheadCount: 1, aheadOfDefaultCount: 1 });
+    assert.isFalse(buildMenuItems(gitDirty, false).find((item) => item.id === "pr")!.disabled);
+  });
+
   it("blocks every action when jj is unsupported", () => {
     const unsupported = status({
       hasWorkingTreeChanges: true,

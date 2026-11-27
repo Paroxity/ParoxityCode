@@ -29,7 +29,6 @@ import * as JjProcess from "../vcs/JjProcess.ts";
 import * as JjVcsDriver from "../vcs/JjVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
-import { jjFailure } from "./JjFailure.ts";
 import { makeJjPullRequestThread } from "./JjPullRequestThread.ts";
 import { makeJjRefs } from "./JjRefs.ts";
 import { makeJjRemotes, type JjPublishResult } from "./JjRemotes.ts";
@@ -37,10 +36,12 @@ import { makeJjStackedAction } from "./JjStackedAction.ts";
 import {
   makeJjStatus,
   readImportedUpstream,
-  resolveWorkspaceRefName,
   resolveUpstreamContext,
+  withStatusRefreshReads,
 } from "./JjStatus.ts";
 import { makeJjWorkspaces } from "./JjWorkspaces.ts";
+import { resolveWorkspaceRefName } from "../vcs/JjWorkspaceRef.ts";
+import { jjFailure } from "../vcs/JjProcess.ts";
 
 const RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES = 64 * 1024;
 const RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES = 64 * 1024;
@@ -149,7 +150,7 @@ export const make = Effect.gen(function* () {
 
   const remotes = makeJjRemotes({ driver, process });
   const refs = yield* makeJjRefs({ driver, process });
-  const workspaceOps = makeJjWorkspaces({
+  const workspaceOps = yield* makeJjWorkspaces({
     driver,
     process,
     fileSystem,
@@ -345,6 +346,12 @@ export const make = Effect.gen(function* () {
       return status.localStatus(input);
     }),
     remoteStatus: status.remoteStatus,
+    withRefreshScope: Effect.fn("JjWorkflow.withRefreshScope")(function* <A, E, R>(
+      _cwd: string,
+      effect: Effect.Effect<A, E, R>,
+    ) {
+      return yield* withStatusRefreshReads(effect);
+    }),
     currentBranch: status.currentRefName,
     // Status reads are live; polling must not evict the longer-lived repository metadata or refs.
     // Full invalidation below is reserved for mutations and explicit refreshes.

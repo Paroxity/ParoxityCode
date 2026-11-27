@@ -1,6 +1,5 @@
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "@alchemy.run/cloudflare";
-import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 
 /** Baked into T3 Code as Tangled's OAuth client ID, so it must never move. */
@@ -15,7 +14,6 @@ const Worker = Cloudflare.Worker("Worker", {
   domain: { name: DOMAIN, zoneId: ZONE_ID },
   env: {
     DB: Callbacks,
-    SIGNING_KEY: Config.Redacted("T3_TANGLED_OAUTH_SIGNING_KEY"),
     ORIGIN: `https://${DOMAIN}`,
   },
 });

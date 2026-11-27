@@ -10,10 +10,9 @@ import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 
-import { resolveWorkspaceRefName } from "../jj/JjStatus.ts";
-import { workspaceNameForRef } from "../jj/JjWorkspaces.ts";
 import { commitId, describeJj, runGit, runJj, withJjRepo, write } from "./testing/JjTestSupport.ts";
 import type * as VcsDriver from "./VcsDriver.ts";
+import { resolveWorkspaceRefName, workspaceNameForRef } from "./JjWorkspaceRef.ts";
 
 interface RepoContext {
   readonly getDiffPreview: (

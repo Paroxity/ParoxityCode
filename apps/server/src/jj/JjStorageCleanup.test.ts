@@ -18,19 +18,27 @@ import {
   type JjRepoFixture,
 } from "../vcs/testing/JjTestSupport.ts";
 import { inspectJjStorageCleanup, removeJjStorageCleanup } from "./JjStorageCleanup.ts";
-import { makeJjWorkspaces, workspaceNameForRef, workspacePruneLock } from "./JjWorkspaces.ts";
+import { makeJjWorkspaces } from "./JjWorkspaces.ts";
 import { makeJjRemotes } from "./JjRemotes.ts";
 import { STATUS_UPSTREAM_REFRESH_ENV } from "../vcs/GitVcsDriverCore.ts";
 import * as JjProcess from "../vcs/JjProcess.ts";
+import * as JjVcsDriver from "../vcs/JjVcsDriver.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { workspaceNameForRef } from "../vcs/JjWorkspaceRef.ts";
 
 const bookmark = "feature/cleanup";
+// A fresh driver and runner over whatever spawner and file system the caller wraps around it.
+const freshJjServices = JjVcsDriver.layer.pipe(Layer.provideMerge(VcsProcess.layer));
 const withWorkspace = <A, E>(
   use: (
     repo: JjRepoFixture & { readonly cwd: string },
   ) => Effect.Effect<
     A,
     E,
-    Layer.Success<typeof NodeServices.layer> | Layer.Success<typeof NodeCrypto.layer>
+    | Layer.Success<typeof NodeServices.layer>
+    | Layer.Success<typeof NodeCrypto.layer>
+    | JjVcsDriver.JjVcsDriver
+    | VcsProcess.VcsProcess
   >,
 ) =>
   withJjRepo({ prefix: "t3-jj-storage-cleanup-", seed: true }, (repo) =>
@@ -47,7 +55,10 @@ const withWorkspace = <A, E>(
         bookmark,
         cwd,
       ]);
-      return yield* use({ ...repo, cwd });
+      return yield* use({ ...repo, cwd }).pipe(
+        Effect.provideService(JjVcsDriver.JjVcsDriver, repo.driver),
+        Effect.provideService(VcsProcess.VcsProcess, repo.process),
+      );
     }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
@@ -238,7 +249,7 @@ exec "$real_jj" "$@"
           ),
         );
         const reason = yield* removeJjStorageCleanup(cwd, bookmark, inspected.commitId).pipe(
-          Effect.provide(Layer.empty, { local: true }),
+          Effect.provide(freshJjServices, { local: true }),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, wrappedSpawner),
         );
         assert.isTrue(yield* fileSystem.exists(firstRead));
@@ -342,7 +353,7 @@ exec "$real_jj" "$@"
             assert.equal(discoveries, 2);
             assert.isAtLeast(modeInspections, 4);
           }).pipe(
-            Effect.provide(Layer.empty, { local: true }),
+            Effect.provide(freshJjServices, { local: true }),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, wrappedSpawner),
           );
         }),
@@ -402,7 +413,7 @@ exec "$real_jj" "$@"
                 );
                 assert.isTrue(yield* fileSystem.exists(cwd));
               }).pipe(
-                Effect.provide(Layer.empty, { local: true }),
+                Effect.provide(freshJjServices, { local: true }),
                 Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, wrappedSpawner),
               ),
             (spy) => Effect.sync(() => spy.mockRestore()),
@@ -604,7 +615,7 @@ exec "$real_jj" "$@"
           inspected.commitId,
           keepWhen,
         ).pipe(
-          Effect.provide(Layer.empty, { local: true }),
+          Effect.provide(freshJjServices, { local: true }),
           Effect.provideService(FileSystem.FileSystem, wrappedFs),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, wrappedSpawner),
         );
@@ -654,7 +665,7 @@ exec "$real_jj" "$@"
           });
           const result = yield* Effect.flip(
             removeJjStorageCleanup(cwd, bookmark, inspected.commitId).pipe(
-              Effect.provide(Layer.empty, { local: true }),
+              Effect.provide(freshJjServices, { local: true }),
               Effect.provideService(FileSystem.FileSystem, wrappedFs),
             ),
           );
@@ -713,7 +724,7 @@ exec "$real_jj" "$@"
         );
         const error = yield* Effect.flip(
           removeJjStorageCleanup(cwd, bookmark, inspected.commitId, "tracked-changes").pipe(
-            Effect.provide(Layer.empty, { local: true }),
+            Effect.provide(freshJjServices, { local: true }),
             Effect.provideService(FileSystem.FileSystem, wrappedFs),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, wrappedSpawner),
           ),
@@ -751,27 +762,34 @@ exec "$real_jj" "$@"
                 }
               }),
           });
+          // Removal and pruning share the repository's driver, and so its prune lock.
           const removing = yield* removeJjStorageCleanup(cwd, bookmark, inspected.commitId).pipe(
-            Effect.provide(Layer.empty, { local: true }),
             Effect.provideService(FileSystem.FileSystem, wrappedFs),
             Effect.forkChild,
           );
           yield* Deferred.await(moved);
           const lockAttempted = yield* Deferred.make<void>();
-          const originalWithPermit = workspacePruneLock.withPermit;
-          using _permitSpy = vi
-            .spyOn(workspacePruneLock, "withPermit")
-            .mockImplementation(<A, E, R>(effect: Effect.Effect<A, E, R>) =>
-              Effect.gen(function* () {
-                const acquired = yield* workspacePruneLock.takeIfAvailable(1);
-                if (acquired) yield* workspacePruneLock.release(1);
-                assert.isFalse(acquired);
-                yield* Deferred.succeed(lockAttempted, undefined);
-                return yield* originalWithPermit(effect);
-              }),
-            );
-          const ops = makeJjWorkspaces({
-            driver,
+          let acquiredAfterRelease: boolean | undefined;
+          const ops = yield* makeJjWorkspaces({
+            driver: {
+              ...driver,
+              withWorkspacePruneLock: (key, effect) =>
+                Deferred.succeed(lockAttempted, undefined).pipe(
+                  Effect.andThen(
+                    driver.withWorkspacePruneLock(
+                      key,
+                      Deferred.isDone(release).pipe(
+                        Effect.tap((done) =>
+                          Effect.sync(() => {
+                            acquiredAfterRelease ??= done;
+                          }),
+                        ),
+                        Effect.andThen(effect),
+                      ),
+                    ),
+                  ),
+                ),
+            },
             process,
             fileSystem,
             path,
@@ -798,6 +816,7 @@ exec "$real_jj" "$@"
           yield* Fiber.join(pruning);
           assert.isNotNull(reason);
           assert.isTrue(pruned);
+          assert.isTrue(acquiredAfterRelease);
           assert.isTrue((yield* driver.listWorkspaces(root)).some((entry) => entry.root === cwd));
           assert.equal(yield* fileSystem.readFileString(path.join(cwd, "late.txt")), "keep\n");
           assert.isNotEmpty(yield* runGit(cwd, ["rev-parse", "--git-dir"]));
@@ -823,7 +842,7 @@ exec "$real_jj" "$@"
             }),
         });
         const removing = yield* removeJjStorageCleanup(cwd, bookmark, inspected.commitId).pipe(
-          Effect.provide(Layer.empty, { local: true }),
+          Effect.provide(freshJjServices, { local: true }),
           Effect.provideService(FileSystem.FileSystem, wrappedFs),
           Effect.forkChild,
         );
@@ -945,7 +964,7 @@ exec "$real_jj" "$@"
         );
         assert.isNull(
           yield* removeJjStorageCleanup(cwd, bookmark, inspected.commitId, "tracked-changes").pipe(
-            Effect.provide(Layer.empty, { local: true }),
+            Effect.provide(freshJjServices, { local: true }),
             Effect.provideService(FileSystem.FileSystem, wrappedFs),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, wrappedSpawner),
           ),
@@ -1004,7 +1023,7 @@ exec "$real_jj" "$@"
             inspected.commitId,
             "tracked-changes",
           ).pipe(
-            Effect.provide(Layer.empty, { local: true }),
+            Effect.provide(freshJjServices, { local: true }),
             Effect.provideService(FileSystem.FileSystem, wrappedFs),
           );
           assert.isTrue(injected);

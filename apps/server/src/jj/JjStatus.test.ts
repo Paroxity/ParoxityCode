@@ -21,13 +21,16 @@ import {
 } from "../vcs/testing/JjTestSupport.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { makeJjRemotes } from "./JjRemotes.ts";
+import { makeJjStatus, type JjStatusOps, withStatusRefreshReads } from "./JjStatus.ts";
+import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
+import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import {
-  makeJjStatus,
   refNameFromSegment,
   resolveWorkspaceRefName,
-  type JjStatusOps,
-} from "./JjStatus.ts";
-import { workspaceNameForRef } from "./JjWorkspaces.ts";
+  workspaceNameForRef,
+} from "../vcs/JjWorkspaceRef.ts";
 
 /** Counts both jj snapshots and colocated Git diff work on the polling path. */
 const countingDriverLayer = (counter: {
@@ -1205,4 +1208,82 @@ describeJj("refNameFromSegment", () => {
   it("is null when nothing in the segment carries a bookmark", () => {
     assert.equal(refNameFromSegment([{ commitId: "a", empty: true, localBookmarks: [] }]), null);
   });
+});
+
+describeJj("JjStatus broadcaster refresh reads", () => {
+  it.effect.each(["getStatus", "refreshStatus"] as const)(
+    "shares real jj reads in broadcaster $0",
+    (method) =>
+      withJjRepo({ prefix: "t3-jj-broadcast-dedup-", seed: true }, (repo) =>
+        Effect.gen(function* () {
+          let segments = 0;
+          let workspaces = 0;
+          const status = yield* makeStatus(
+            {
+              ...repo.driver,
+              currentSegment: (cwd) =>
+                Effect.sync(() => {
+                  segments += 1;
+                }).pipe(Effect.andThen(repo.driver.currentSegment(cwd))),
+              listWorkspaces: (cwd) =>
+                Effect.sync(() => {
+                  workspaces += 1;
+                }).pipe(Effect.andThen(repo.driver.listWorkspaces(cwd))),
+            },
+            repo.process,
+          );
+          const layer = VcsStatusBroadcaster.layer.pipe(
+            Layer.provide(
+              Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+                detect: ({ cwd }) =>
+                  repo.driver
+                    .detectRepository(cwd)
+                    .pipe(
+                      Effect.map((repository) =>
+                        repository === null
+                          ? null
+                          : { kind: "jj" as const, repository, driver: repo.driver },
+                      ),
+                    ),
+              }),
+            ),
+            Layer.provide(
+              Layer.mock(GitWorkflowService.GitWorkflowService)({
+                withRefreshScope: (_cwd, effect) => withStatusRefreshReads(effect),
+                localStatus: (input) => status.localStatus(input),
+                currentBranch: status.currentRefName,
+                remoteStatus: status.remoteStatus,
+                invalidateStatus: repo.driver.invalidateRepoCaches,
+                invalidateLocalStatus: repo.driver.invalidateRepoCaches,
+                invalidateRemoteStatus: () => Effect.void,
+                readRefSnapshot: () => Effect.succeed(null),
+                readStatusRefreshRefs: () => Effect.succeed(null),
+                readStatusPoll: () => Effect.succeed(null),
+              }),
+            ),
+            Layer.provide(
+              Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+                shouldRunScopeWork: () => Effect.succeed(false),
+              }),
+            ),
+            Layer.provide(
+              Layer.succeed(VcsStatusBroadcaster.VcsAutoPullPolicy, {
+                isEnabled: () => Effect.succeed(false),
+              }),
+            ),
+          );
+          yield* Effect.gen(function* () {
+            const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+            yield* method === "getStatus"
+              ? broadcaster.getStatus({ cwd: repo.root })
+              : broadcaster.refreshStatus(repo.root);
+            assert.equal(segments, 1);
+            assert.equal(workspaces, 1);
+            yield* broadcaster.refreshStatus(repo.root);
+            assert.equal(segments, 2);
+            assert.equal(workspaces, 2);
+          }).pipe(Effect.provide(layer));
+        }),
+      ),
+  );
 });

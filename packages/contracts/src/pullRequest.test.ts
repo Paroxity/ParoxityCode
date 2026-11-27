@@ -12,6 +12,7 @@ import {
   PullRequestDiffInput,
   PullRequestListResult,
   PullRequestOperationError,
+  PullRequestRound,
   resolvePullRequestAuthorFilter,
 } from "./pullRequest.ts";
 import { WS_METHODS, WsRpcGroup } from "./rpc.ts";
@@ -171,6 +172,24 @@ describe("PullRequestDiffInput", () => {
     expect(Result.isFailure(decode({ ...ref, commit: "abc1234", round: { number: 2 } }))).toBe(
       true,
     );
+  });
+});
+
+const decodeRound = Schema.decodeUnknownResult(Schema.toCodecJson(PullRequestRound));
+
+describe("PullRequestRound", () => {
+  it("reads a round from a server that still sent its author", () => {
+    const round = {
+      number: 2,
+      headSha: "c".repeat(40),
+      baseSha: "b".repeat(40),
+      createdAt: "2026-11-02T10:00:00.000Z",
+    };
+    const fromOlderServer: unknown = {
+      ...round,
+      author: { login: "alice.tngl.sh", name: null, avatarUrl: null },
+    };
+    expect(decodeRound(fromOlderServer)).toEqual(Result.succeed(round));
   });
 });
 

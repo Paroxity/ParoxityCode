@@ -15,7 +15,7 @@ import {
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { cn } from "../../lib/utils";
 import { useIssuesSupported, usePullRequestsSupported } from "../../state/environments";
-import { FORK_WORDMARK_LEAD, T3Wordmark } from "../T3Wordmark";
+import { BrandWordmarkLead } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -187,11 +187,11 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
 function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
   return (
     <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight">
-      {FORK_WORDMARK_LEAD ? (
-        <span className="shrink-0">{FORK_WORDMARK_LEAD}</span>
-      ) : (
-        <T3Wordmark aria-label="T3" className="h-[1cap] w-auto shrink-0" />
-      )}
+      <BrandWordmarkLead
+        aria-label="T3"
+        className="h-[1cap] w-auto shrink-0"
+        textClassName="shrink-0"
+      />
       <span
         className={cn(
           "truncate [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1",

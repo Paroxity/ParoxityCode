@@ -6,7 +6,6 @@ import { isClearComposerCommand, parseSideChatCommand } from "@t3tools/shared/co
 import { readWorktreeBaseBranch } from "../../worktreeRepositoryChoiceStore";
 import { armFreshSession, disarmFreshSession, readFreshSessionArm } from "./freshSessionArms";
 import { vcsOperationErrorMessage } from "@t3tools/client-runtime/errors";
-import type { VcsTerminology } from "@t3tools/shared/vcs";
 import {
   mergeDirectPreviewAnnotation,
   resolveBackgroundDraftWorkspaceOptions,
@@ -209,7 +208,6 @@ type TimelineFollow = ReturnType<typeof useTimelineFollow>;
 
 interface ComposerSendInput {
   readonly vcsWorkspacePreparationBlocked: boolean;
-  readonly vcsTerminology: VcsTerminology;
   readonly environmentId: EnvironmentId;
   readonly routeThreadKey: string;
   readonly currentRouteThreadKeyRef: { readonly current: string | null };
@@ -792,22 +790,10 @@ export function useComposerSend(input: ComposerSendInput) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
-          title:
-            input.vcsTerminology.kind === "jj"
-              ? m(msg("Choose models and a base bookmark"))
-              : m(msg("Choose models and a base branch")),
-          description:
-            input.vcsTerminology.kind === "jj"
-              ? m(
-                  msg(
-                    "Multiple models need a new thread in a Jujutsu project. Each gets its own workspace.",
-                  ),
-                )
-              : m(
-                  msg(
-                    "Multiple models need a new thread in a Git project. Each gets its own worktree.",
-                  ),
-                ),
+          title: m(msg("Choose models and a base branch")),
+          description: m(
+            msg("Multiple models need a new thread in a Git project. Each gets its own worktree."),
+          ),
         }),
       );
       return;

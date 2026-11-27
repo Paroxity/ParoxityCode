@@ -118,4 +118,36 @@ describe("VcsProjectConfig", () => {
       }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
     });
   });
+
+  it.effect("walks ancestors once per directory and rechecks a found config", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-vcs-config-test-" });
+      const configPath = path.join(root, ".t3code", "vcs.json");
+      yield* fileSystem.makeDirectory(path.dirname(configPath), { recursive: true });
+      yield* fileSystem.writeFileString(configPath, JSON.stringify({ vcs: { kind: "git" } }));
+      const nested = path.join(root, "a", "b");
+      yield* fileSystem.makeDirectory(nested, { recursive: true });
+      const probes: string[] = [];
+      const config = yield* VcsProjectConfig.make.pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fileSystem,
+          exists: (candidate) =>
+            Effect.sync(() => probes.push(candidate)).pipe(
+              Effect.andThen(fileSystem.exists(candidate)),
+            ),
+        }),
+      );
+
+      assert.equal(yield* config.resolveKind({ cwd: nested }), "git");
+      assert.include(probes, path.join(nested, ".t3code", "vcs.json"));
+      probes.length = 0;
+      assert.equal(yield* config.resolveKind({ cwd: nested }), "git");
+      assert.deepEqual(probes, [configPath]);
+
+      yield* fileSystem.remove(configPath);
+      assert.equal(yield* config.resolveKind({ cwd: nested }), "auto");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
 });

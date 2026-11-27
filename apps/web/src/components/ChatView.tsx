@@ -283,12 +283,7 @@ import {
   resolveProviderSkillsForCwd,
   resolveProvidersForCwd,
 } from "@t3tools/client-runtime/providerSkills";
-import {
-  chatGitStatusAtom,
-  NO_CHAT_GIT_STATUS_ATOM,
-  vcsEnvironment,
-  VcsTerminologyContext,
-} from "../state/vcs";
+import { chatGitStatusAtom, NO_CHAT_GIT_STATUS_ATOM, vcsEnvironment } from "../state/vcs";
 import {
   type EnvironmentPresentation,
   useEnvironment,
@@ -296,11 +291,7 @@ import {
   useEnvironments,
   usePrimaryEnvironment,
 } from "../state/environments";
-import {
-  resolveVcsTerminology,
-  resolveVcsUnsupportedReason,
-  supportsVcsActions,
-} from "@t3tools/shared/vcs";
+import { resolveVcsUnsupportedReason, supportsVcsActions } from "@t3tools/shared/vcs";
 import {
   resolveThreadDetailRef,
   useEnvironmentSupportsServerBrowser,
@@ -1907,7 +1898,6 @@ export default function ChatView(props: ChatViewProps) {
     isGitRepo ||
     (activeProject?.trackedFolders?.length ?? 0) > 0 ||
     turnDiffSummaries.some((summary) => summary.repositories !== undefined);
-  const vcsTerminology = resolveVcsTerminology(gitStatusQuery.data);
   const vcsUnsupportedReason = resolveVcsUnsupportedReason(gitStatusQuery.data);
   const onRetryWorkspacePreparationStable = useStableCallback((runId: RunId) => {
     if (vcsActionsSupported) retryWorkspacePreparation(runId);
@@ -2897,7 +2887,6 @@ export default function ChatView(props: ChatViewProps) {
       ...systemComposerBannerItems,
       branchMismatchBannerItem(
         {
-          terminology: vcsTerminology,
           mismatchKey: activeBranchMismatchKey,
           mismatch: localCheckoutBranchMismatch,
           restoreDisabled:
@@ -3165,7 +3154,6 @@ export default function ChatView(props: ChatViewProps) {
   });
   const { onSend, captureDetachedSend } = useComposerSend({
     vcsWorkspacePreparationBlocked,
-    vcsTerminology,
     environmentId,
     routeThreadKey,
     currentRouteThreadKeyRef,
@@ -3921,7 +3909,6 @@ export default function ChatView(props: ChatViewProps) {
                                 composerRef={composerRef}
                                 composerDraftTarget={composerDraftTarget}
                                 environmentId={environmentId}
-                                workspaceNoun={vcsTerminology.workspaceNoun}
                                 attachmentUploadsCapabilityKnown={attachmentUploadsCapabilityKnown}
                                 supportsAttachmentUploads={supportsAttachmentUploads}
                                 supportsQuestionAttachments={supportsQuestionAttachments}
@@ -3965,9 +3952,7 @@ export default function ChatView(props: ChatViewProps) {
                                             : threadDetailLoading
                                               ? gt("Messages loading")
                                               : worktreeSetupBlocksSend
-                                                ? vcsTerminology.kind === "jj"
-                                                  ? gt("Preparing workspace")
-                                                  : gt("Preparing worktree")
+                                                ? gt("Preparing worktree")
                                                 : projectCloneSendBlockReason
                                 }
                                 isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
@@ -4187,7 +4172,6 @@ export default function ChatView(props: ChatViewProps) {
                   threadKey={activeThreadKey}
                   threadBranch={localCheckoutBranchMismatch?.threadBranch ?? ""}
                   canWriteSourceControl={canWriteSourceControl && vcsActionsSupported}
-                  terminology={vcsTerminology}
                   onConfirm={handleSwitchCheckoutToThreadStable}
                 />
 
@@ -4381,7 +4365,7 @@ export default function ChatView(props: ChatViewProps) {
       checkpoints={serverProjection?.checkpoints}
       checkpointScopes={serverProjection?.checkpointScopes}
     >
-      <VcsTerminologyContext value={vcsTerminology}>{content}</VcsTerminologyContext>
+      {content}
     </FileMetadataThreadProvider>
   );
 }

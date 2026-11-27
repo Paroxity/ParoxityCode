@@ -93,14 +93,6 @@ function layer(input: {
             gitDir: `${cwd}/.git`,
             isSecondaryWorkspace: false,
           }),
-        capabilities: {
-          kind: "jj",
-          supportsWorktrees: true,
-          supportsBookmarks: true,
-          supportsAtomicSnapshot: true,
-          supportsPushDefaultRemote: false,
-          ignoreClassifier: "git-compatible-fallback",
-        },
       }),
     ),
     Layer.provide(

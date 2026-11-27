@@ -1557,7 +1557,7 @@ export function PullRequestDetailPanel({
     context === "page" ? (
       <PullRequestCheckoutMenu
         term={changeRequestTermKind(terminology)}
-        workspaceNoun={vcsTerminology.workspaceNoun}
+        vcsKind={vcsTerminology.kind}
         handoff={handoff}
         checkoutRoot={checkoutRoot}
         canPrepareWorktree={canPrepareWorktree}

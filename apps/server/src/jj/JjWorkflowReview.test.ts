@@ -32,7 +32,7 @@ import {
   type JjRepoFixture,
 } from "../vcs/testing/JjTestSupport.ts";
 import * as JjWorkflow from "./JjWorkflow.ts";
-import { workspaceNameForRef } from "./JjWorkspaces.ts";
+import { workspaceNameForRef } from "../vcs/JjWorkspaceRef.ts";
 
 const makeWorkflow = (
   repo: JjRepoFixture,

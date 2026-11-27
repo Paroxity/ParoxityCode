@@ -6,8 +6,10 @@ import {
 } from "@t3tools/contracts";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 
 import { definition } from "../shared/definition.ts";
 import {
@@ -344,7 +346,7 @@ describe("TangledSourceControlProvider", () => {
       },
     });
     /** #7 is the viewer's and #8 someone else's, both proposing `feature` at `latest`. */
-    const pushRoutes = (latest: string): Record<string, FakeRoute> => {
+    const pushRoutes = (latest: string, mirror = { caughtUp: true }): Record<string, FakeRoute> => {
       let submitted = false;
       return {
         ...world("alice.tngl.sh", "new-name"),
@@ -357,7 +359,14 @@ describe("TangledSourceControlProvider", () => {
           },
         }),
         "org.tangled.temp.git.getRef": (request: RecordedRequest) => ({
-          body: { oid: request.params.get("ref") === "refs/heads/feature" ? PUSHED : TIP },
+          body: {
+            oid:
+              request.params.get("ref") !== "refs/heads/feature"
+                ? TIP
+                : mirror.caughtUp
+                  ? PUSHED
+                  : latest,
+          },
         }),
         "org.tangled.temp.git.getMergeBase": { commit: BASE },
         "org.tangled.review.submitPatch": () => {
@@ -376,15 +385,24 @@ describe("TangledSourceControlProvider", () => {
     });
     const pushedLayer = (fake: ReturnType<typeof fakeTangled>) =>
       Layer.mergeAll(fake.layer, remote, FileSystem.layerNoop({}));
-    const push = Effect.gen(function* () {
-      const provider = yield* TangledSourceControlProvider.make;
+    /** The push returns before its round is submitted; the effect it hands back waits for that. */
+    const startPush = Effect.gen(function* () {
+      const { provider, awaitPushFollowers } =
+        yield* TangledSourceControlProvider.makeWithPushFollowers;
       yield* provider.branchPushed!({ cwd: "/repo", branch: "feature", headSha: PUSHED });
+      return awaitPushFollowers;
     });
+    const push = Effect.flatten(startPush);
 
-    it.effect("submits the pushed head as the next round of the viewer's pull request", () => {
-      const fake = fakeTangled(pushRoutes(HEAD));
+    it.effect("submits the pushed head as the next round once Tangled's mirror has it", () => {
+      const mirror = { caughtUp: false };
+      const fake = fakeTangled(pushRoutes(HEAD, mirror));
       return Effect.gen(function* () {
-        yield* push;
+        const settled = yield* startPush;
+        assert.deepStrictEqual(fake.writes(), [], "the push does not wait for the mirror");
+        mirror.caughtUp = true;
+        yield* TestClock.adjust("1 second");
+        yield* settled;
         assert.deepStrictEqual(
           fake.writes().map((write) => write.body),
           [
@@ -404,7 +422,8 @@ describe("TangledSourceControlProvider", () => {
       }).pipe(Effect.provide(pushedLayer(fake)));
     });
 
-    it.effect("names the pull request it could not resubmit", () => {
+    it.effect("logs the pull request it could not resubmit", () => {
+      const logged: Array<unknown> = [];
       const fake = fakeTangled({
         ...pushRoutes(HEAD),
         "org.tangled.review.submitPatch": () => ({
@@ -413,12 +432,23 @@ describe("TangledSourceControlProvider", () => {
         }),
       });
       return Effect.gen(function* () {
-        const error = yield* push.pipe(Effect.flip);
-        assert.strictEqual(
-          error.detail,
-          "Pull request #7 was not resubmitted. head is not on feature",
-        );
-      }).pipe(Effect.provide(pushedLayer(fake)));
+        yield* push;
+        assert.deepStrictEqual(logged, [
+          [
+            "Tangled did not take the pushed branch as a new round.",
+            { branch: "feature", number: 7, detail: "head is not on feature" },
+          ],
+        ]);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            pushedLayer(fake),
+            Logger.layer([Logger.make(({ message }) => logged.push(message))], {
+              mergeWithExisting: false,
+            }),
+          ),
+        ),
+      );
     });
 
     it.effect("submits nothing when the latest round already has the pushed head", () => {

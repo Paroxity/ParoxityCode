@@ -13,7 +13,6 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ServerConfig from "../config.ts";
 import { refreshPathFromLoginShell } from "../os-jank.ts";
 import * as JjAvailability from "../vcs/JjAvailability.ts";
-import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import {
   detailFromCause,
@@ -87,7 +86,6 @@ export const make = Effect.gen(function* () {
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     Effect.cachedWithTTL(Duration.seconds(10)),
   );
-  const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
 
   const probe = <Kind extends VcsDriverKind>(
     input: VcsProbe & { readonly kind: Kind },
@@ -150,31 +148,19 @@ export const make = Effect.gen(function* () {
       Effect.all({
         versionControlSystems: Effect.all(
           VCS_PROBES.map((entry) =>
-            (entry.kind === "jj"
-              ? registry.get("jj").pipe(
-                  Effect.match({
-                    onFailure: () => ({ ...entry, implemented: false }),
-                    onSuccess: () => ({ ...entry, implemented: true }),
+            Effect.flatMap(isExecutableOnPath(entry.executable), (found) =>
+              found
+                ? probe(entry)
+                : Effect.succeed({
+                    kind: entry.kind,
+                    label: entry.label,
+                    executable: entry.executable,
+                    implemented: entry.implemented,
+                    status: "missing" as const,
+                    version: Option.none<string>(),
+                    installHint: entry.installHint,
+                    detail: Option.none<string>(),
                   }),
-                )
-              : Effect.succeed(entry)
-            ).pipe(
-              Effect.flatMap((entry) =>
-                Effect.flatMap(isExecutableOnPath(entry.executable), (found) =>
-                  found
-                    ? probe(entry)
-                    : Effect.succeed({
-                        kind: entry.kind,
-                        label: entry.label,
-                        executable: entry.executable,
-                        implemented: entry.implemented,
-                        status: "missing" as const,
-                        version: Option.none<string>(),
-                        installHint: entry.installHint,
-                        detail: Option.none<string>(),
-                      }),
-                ),
-              ),
             ),
           ) as ReadonlyArray<Effect.Effect<VcsDiscoveryItem>>,
           { concurrency: "unbounded" },

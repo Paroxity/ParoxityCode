@@ -5,6 +5,7 @@ import type {
   PullRequestUpdateMethod,
 } from "@t3tools/contracts";
 import { CheckIcon, ChevronDownIcon, FolderGit2Icon, GitBranchIcon, PlayIcon } from "lucide-react";
+import type { VcsTerminology } from "@t3tools/shared/vcs";
 import { Branch, T, useGT } from "gt-react";
 import type { ReactNode } from "react";
 
@@ -76,7 +77,7 @@ export function ActOnEnvironmentPicker({
 }
 
 export function PullRequestCheckoutMenu({
-  workspaceNoun,
+  vcsKind,
   handoff,
   checkoutRoot,
   canPrepareWorktree,
@@ -87,7 +88,7 @@ export function PullRequestCheckoutMenu({
   onActingEnvironmentChange,
   term,
 }: {
-  workspaceNoun: string;
+  vcsKind: VcsTerminology["kind"];
   handoff: string | null;
   checkoutRoot: string | null;
   canPrepareWorktree: boolean;
@@ -138,11 +139,7 @@ export function PullRequestCheckoutMenu({
           <GitBranchIcon className="mt-1 size-3.5 shrink-0 self-start" />
           <span className="flex min-w-0 flex-col">
             <span>
-              {workspaceNoun === "workspace" ? (
-                <T>In a separate workspace</T>
-              ) : (
-                <T>In a separate worktree</T>
-              )}
+              {vcsKind === "jj" ? <T>In a separate workspace</T> : <T>In a separate worktree</T>}
             </span>
             <span className="text-xs text-muted-foreground">
               <T>Its own folder and thread. Nothing you have open moves.</T>

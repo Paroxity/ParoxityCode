@@ -5,7 +5,7 @@ import type { SVGProps } from "react";
 const FORK_PRODUCT_NAME = import.meta.env.VITE_FORK_PRODUCT_NAME ?? "";
 
 /** The part of the fork's name before "Code", shown where upstream draws its "T3" glyph. */
-export const FORK_WORDMARK_LEAD = FORK_PRODUCT_NAME.replace(/\s+Code$/, "");
+const FORK_WORDMARK_LEAD = FORK_PRODUCT_NAME.replace(/\s+Code$/, "");
 
 export function T3Wordmark(props: SVGProps<SVGSVGElement>) {
   if (FORK_PRODUCT_NAME) return <ForkMark {...props} />;
@@ -31,5 +31,21 @@ function ForkMark(props: SVGProps<SVGSVGElement>) {
         <path d="M1.2 12A10.8 3.3 0 0 0 22.8 12" strokeWidth="1.9" strokeLinecap="round" />
       </g>
     </svg>
+  );
+}
+
+/**
+ * Fork: the lead of the "T3 Code" wordmark. Upstream-named builds draw the "T3" glyph with the SVG
+ * props; renamed builds write the fork's lead, such as "Paroxity", styled by `textClassName`.
+ */
+export function BrandWordmarkLead({
+  textClassName,
+  ...props
+}: SVGProps<SVGSVGElement> & { readonly textClassName?: string }) {
+  if (!FORK_WORDMARK_LEAD) return <T3Wordmark {...props} />;
+  return (
+    <span className={textClassName} aria-hidden={props["aria-hidden"]}>
+      {FORK_WORDMARK_LEAD}
+    </span>
   );
 }

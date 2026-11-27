@@ -10,7 +10,7 @@ import * as JjVcsDriver from "../vcs/JjVcsDriver.ts";
 import type * as VcsProcess from "../vcs/VcsProcess.ts";
 import { describeJj, runGit, runJj, withJjRepo } from "../vcs/testing/JjTestSupport.ts";
 import { makeJjRemotes, type JjRemoteOps } from "./JjRemotes.ts";
-import { workspaceNameForRef } from "./JjWorkspaces.ts";
+import { workspaceNameForRef } from "../vcs/JjWorkspaceRef.ts";
 
 interface RemotesFixture {
   readonly driver: JjVcsDriver.JjVcsDriverShape;
