@@ -122,10 +122,10 @@ export function resolveContextStripLabelsCompact(input: {
 
 export function resolveEnvModeLabel(
   mode: EnvMode,
-  terminology: VcsTerminology,
   resolve: MessageResolver = m,
+  terminology?: VcsTerminology,
 ): string {
-  if (terminology.kind === "jj") {
+  if (terminology?.kind === "jj") {
     return mode === "worktree"
       ? resolve(msg("New workspace"))
       : resolve(msg("Current working copy"));
@@ -144,7 +144,7 @@ export function resolveCurrentWorkspaceLabel(
   terminology: VcsTerminology,
   resolve: MessageResolver = m,
 ): string {
-  if (!activeWorktreePath) return resolveEnvModeLabel("local", terminology, resolve);
+  if (!activeWorktreePath) return resolveEnvModeLabel("local", resolve, terminology);
   return terminology.kind === "jj"
     ? resolve(msg("Current workspace"))
     : resolve(msg("Current worktree"));
@@ -163,7 +163,7 @@ export function resolveLockedWorkspaceLabel(
       (jj ? resolve(msg("Workspace")) : resolve(msg("Worktree")))
     );
   }
-  if (effectiveEnvMode === "worktree") return resolveEnvModeLabel("worktree", terminology, resolve);
+  if (effectiveEnvMode === "worktree") return resolveEnvModeLabel("worktree", resolve, terminology);
   return jj ? resolve(msg("Local working copy")) : resolve(msg("Local checkout"));
 }
 
@@ -311,7 +311,7 @@ export function resolveBranchTriggerLabel(
     resolvedActiveBranch: string | null;
     resolvedActiveBranchIsRemote: boolean | null;
     startFromOrigin: boolean;
-    terminology: VcsTerminology;
+    terminology?: VcsTerminology;
   },
   resolve: MessageResolver = m,
 ): string {
@@ -324,7 +324,9 @@ export function resolveBranchTriggerLabel(
     terminology,
   } = input;
   if (!resolvedActiveBranch) {
-    return terminology.kind === "jj" ? resolve(msg("Select bookmark")) : resolve(msg("Select ref"));
+    return terminology?.kind === "jj"
+      ? resolve(msg("Select bookmark"))
+      : resolve(msg("Select ref"));
   }
   if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
     // Only the server can determine a local branch's configured remote.

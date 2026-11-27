@@ -7,7 +7,6 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { rewindFileRestore } from "@t3tools/client-runtime/state/thread-repositories";
-import type { VcsTerminology } from "@t3tools/shared/vcs";
 import { useAtomValue } from "@effect/atom-react";
 import { T, Var } from "gt-react";
 import { Atom } from "effect/reactivity";
@@ -152,11 +151,9 @@ export function BranchRestoreConfirmHost(props: {
   readonly threadKey: string | null;
   readonly threadBranch: string;
   readonly canWriteSourceControl: boolean;
-  readonly terminology: VcsTerminology;
   readonly onConfirm: () => void;
 }) {
   const open = useThreadOverlay(branchRestoreConfirmAtom, props.threadKey) !== null;
-  const jj = props.terminology.kind === "jj";
   return (
     <AlertDialog
       open={open}
@@ -176,18 +173,10 @@ export function BranchRestoreConfirmHost(props: {
             </T>
           </AlertDialogTitle>
           <AlertDialogDescription>
-            {jj ? (
-              <T>
-                You have working copy changes. They'll stay in the current change when you switch
-                bookmarks. The switch may be refused if it would leave that change without a
-                bookmark.
-              </T>
-            ) : (
-              <T>
-                You have uncommitted changes. They'll carry over to the other branch, or block the
-                switch if they conflict.
-              </T>
-            )}
+            <T>
+              You have uncommitted changes. They'll carry over to the other branch, or block the
+              switch if they conflict.
+            </T>
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -203,7 +192,7 @@ export function BranchRestoreConfirmHost(props: {
               props.onConfirm();
             }}
           >
-            {jj ? <T>Switch bookmark</T> : <T>Switch branch</T>}
+            <T>Switch branch</T>
           </Button>
         </AlertDialogFooter>
       </AlertDialogPopup>

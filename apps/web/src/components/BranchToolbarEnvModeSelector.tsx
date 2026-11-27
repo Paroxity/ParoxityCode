@@ -66,7 +66,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
       value: "local",
       label: resolveCurrentWorkspaceLabel(activeWorktreePath, terminology, m),
     },
-    { value: "worktree", label: resolveEnvModeLabel("worktree", terminology, m) },
+    { value: "worktree", label: resolveEnvModeLabel("worktree", m, terminology) },
     ...(showPreviousWorktree && previousWorktreeLabel
       ? [{ value: PREVIOUS_WORKTREE_SELECT_VALUE, label: previousWorktreeLabel }]
       : []),
@@ -93,7 +93,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         )}
         <ComposerContextLabel>
           {forceNewWorktree
-            ? resolveEnvModeLabel("worktree", terminology, m)
+            ? resolveEnvModeLabel("worktree", m, terminology)
             : resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode, terminology, m)}
         </ComposerContextLabel>
       </span>
@@ -154,7 +154,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         </TooltipTrigger>
         <TooltipPopup>
           {effectiveEnvMode === "worktree"
-            ? resolveEnvModeLabel("worktree", terminology, m)
+            ? resolveEnvModeLabel("worktree", m, terminology)
             : resolveCurrentWorkspaceLabel(activeWorktreePath, terminology, m)}
           {shortcutLabel ? ` · ${shortcutLabel}` : null}
         </TooltipPopup>
@@ -181,7 +181,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
           <SelectItem value="worktree" disabled={!vcsActionsSupported}>
             <span className="inline-flex items-center gap-1.5">
               <FolderGit2Icon className="size-3" />
-              {resolveEnvModeLabel("worktree", terminology, m)}
+              {resolveEnvModeLabel("worktree", m, terminology)}
             </span>
           </SelectItem>
           {showPreviousWorktree && previousWorktreeLabel ? (

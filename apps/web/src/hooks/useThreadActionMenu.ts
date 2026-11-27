@@ -31,7 +31,6 @@ import { copyThreadReference } from "../lib/copyThreadReference";
 import { m } from "../i18n/messages";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import { threadEnvironment } from "../state/threads";
-import { useVcsTerminology } from "../state/vcs";
 import { threadTriagePermitted, useOrchestrationCommand } from "../state/use-orchestration-command";
 import { readEnvironmentScope } from "../state/session";
 import {
@@ -77,9 +76,6 @@ export function useThreadActionMenu(input: {
   const router = useRouter();
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const threadWorkspacePath =
-    threadRef === null ? null : (readThreadShell(threadRef)?.worktreePath ?? projectCwd);
-  const terminology = useVcsTerminology(threadRef?.environmentId ?? null, threadWorkspacePath);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const logicalProjectKeyByPhysicalKey = buildPhysicalToLogicalProjectKeyMap({
     projects,
@@ -110,25 +106,12 @@ export function useThreadActionMenu(input: {
     onError: (error) => failureToast(m(msg("Failed to copy path")), error),
   });
   const { copyToClipboard: copyBranchToClipboard } = useCopyToClipboard<{ branch: string }>({
-    target:
-      terminology.kind === "jj"
-        ? {
-            target: "bookmark name",
-            unavailableMessage: msg("Clipboard API is unavailable while copying bookmark name."),
-            failureMessage: msg("Failed to copy bookmark name to the clipboard."),
-          }
-        : {
-            target: "branch name",
-            unavailableMessage: msg("Clipboard API is unavailable while copying branch name."),
-            failureMessage: msg("Failed to copy branch name to the clipboard."),
-          },
-    onError: (error) =>
-      failureToast(
-        terminology.kind === "jj"
-          ? m(msg("Failed to copy bookmark"))
-          : m(msg("Failed to copy branch")),
-        error,
-      ),
+    target: {
+      target: "branch name",
+      unavailableMessage: msg("Clipboard API is unavailable while copying branch name."),
+      failureMessage: msg("Failed to copy branch name to the clipboard."),
+    },
+    onError: (error) => failureToast(m(msg("Failed to copy branch")), error),
   });
   const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: ThreadId }>({
     onError: (error) => failureToast(m(msg("Failed to copy thread ID")), error),
@@ -156,7 +139,6 @@ export function useThreadActionMenu(input: {
       canFind: onFind !== undefined,
       canRename: onStartRename !== undefined,
       branch: thread.branch ?? null,
-      terminology,
       projectFilter: null,
       isPinned: thread.pinnedAt != null,
       isSettled: supports.settlement && thread.settledOverride === "settled",

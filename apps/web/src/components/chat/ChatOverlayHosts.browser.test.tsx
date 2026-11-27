@@ -4,7 +4,6 @@ import {
   type OrchestrationV2Checkpoint,
   ThreadId,
 } from "@t3tools/contracts";
-import { GIT_VCS_TERMINOLOGY, JJ_VCS_TERMINOLOGY } from "@t3tools/shared/vcs";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { AppAtomRegistryProvider } from "~/rpc/atomRegistry";
@@ -22,45 +21,37 @@ const messageId = MessageId.make("message-1");
 const dialog = () => document.querySelector('[role="alertdialog"]');
 
 describe("BranchRestoreConfirmHost", () => {
-  it.each([GIT_VCS_TERMINOLOGY, JJ_VCS_TERMINOLOGY])(
-    "preserves $systemName terminology and thread ownership",
-    async (terminology) => {
-      const onConfirm = vi.fn();
-      // The overlay atom is app-global, so each case owns its thread keys.
-      const [ownThread, otherThread] = [
-        `${terminology.systemName}:a`,
-        `${terminology.systemName}:b`,
-      ];
-      const host = (threadKey: string) => (
-        <AppAtomRegistryProvider>
-          <BranchRestoreConfirmHost
-            threadKey={threadKey}
-            threadBranch="feature"
-            canWriteSourceControl
-            terminology={terminology}
-            onConfirm={onConfirm}
-          />
-        </AppAtomRegistryProvider>
-      );
-      await using screen = await render(host(ownThread));
-      await act(() => openBranchRestoreConfirm(otherThread));
-      expect(dialog()).toBeNull();
+  it("only opens for its own thread", async () => {
+    const onConfirm = vi.fn();
+    // The overlay atom is app-global, so this case owns its thread keys.
+    const [ownThread, otherThread] = ["restore:a", "restore:b"];
+    const host = (threadKey: string) => (
+      <AppAtomRegistryProvider>
+        <BranchRestoreConfirmHost
+          threadKey={threadKey}
+          threadBranch="feature"
+          canWriteSourceControl
+          onConfirm={onConfirm}
+        />
+      </AppAtomRegistryProvider>
+    );
+    await using screen = await render(host(ownThread));
+    await act(() => openBranchRestoreConfirm(otherThread));
+    expect(dialog()).toBeNull();
 
-      await act(() => openBranchRestoreConfirm(ownThread));
-      expect(dialog()?.textContent).toContain(terminology.refSwitchChangesDescription);
-      const confirm = [...(dialog()?.querySelectorAll("button") ?? [])].find(
-        (button) => button.textContent === `Switch ${terminology.refNoun}`,
-      );
-      expect(confirm).toBeDefined();
-      await act(() => confirm?.click());
-      expect(onConfirm).toHaveBeenCalledExactlyOnceWith();
-      await vi.waitFor(() => expect(dialog()).toBeNull());
+    await act(() => openBranchRestoreConfirm(ownThread));
+    const confirm = [...(dialog()?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent === "Switch branch",
+    );
+    expect(confirm).toBeDefined();
+    await act(() => confirm?.click());
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith();
+    await vi.waitFor(() => expect(dialog()).toBeNull());
 
-      await act(() => openBranchRestoreConfirm(ownThread));
-      await screen.rerender(host(otherThread));
-      await vi.waitFor(() => expect(dialog()).toBeNull());
-    },
-  );
+    await act(() => openBranchRestoreConfirm(ownThread));
+    await screen.rerender(host(otherThread));
+    await vi.waitFor(() => expect(dialog()).toBeNull());
+  });
 });
 
 // Only the fields the dialog reads: a ready checkpoint for the second turn.
@@ -79,7 +70,6 @@ describe("unsupported VCS overlay actions", () => {
           threadKey="env:unsupported-restore"
           threadBranch="feature"
           canWriteSourceControl={supported}
-          terminology={GIT_VCS_TERMINOLOGY}
           onConfirm={onConfirm}
         />
       </AppAtomRegistryProvider>

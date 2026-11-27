@@ -13,7 +13,6 @@ import { T, useGT } from "gt-react";
 import { useState } from "react";
 import { useT3ProjectFileState } from "../../hooks/useT3ProjectFileScripts";
 import { useEnvironments } from "../../state/environments";
-import { useVcsTerminology } from "../../state/vcs";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
   editorRequestForScript,
@@ -76,11 +75,6 @@ export function ProjectActionsSettings() {
   );
 
   const representativeMember = target?.projectId ? memberById.get(target.projectId) : undefined;
-  const checkout = scope.kind === "checkout" ? scope.checkout : representativeMember;
-  const vcsTerminology = useVcsTerminology(
-    checkout?.environmentId ?? null,
-    checkout?.workspaceRoot ?? null,
-  );
   const t3File = useT3ProjectFileState(
     representativeMember?.environmentId ?? EnvironmentId.make("none"),
     representativeMember?.workspaceRoot ?? null,
@@ -127,15 +121,9 @@ export function ProjectActionsSettings() {
         settingKeys={["defaultProjectScripts"]}
         mixed={mixed}
         title={gt("Actions")}
-        description={
-          vcsTerminology.kind === "jj"
-            ? gt(
-                "Commands that run in this project's working copy or its workspace, with optional shortcuts.",
-              )
-            : gt(
-                "Commands that run in this project's checkout or its worktree, with optional shortcuts.",
-              )
-        }
+        description={gt(
+          "Commands that run in this project's checkout or its worktree, with optional shortcuts.",
+        )}
         onResetOverride={() => void persist(() => null)}
         control={
           <div className="flex flex-wrap items-center gap-1.5">
@@ -221,7 +209,6 @@ export function ProjectActionsSettings() {
       {target && (
         <ProjectScriptEditorDialog
           environmentId={target.environmentId}
-          workspaceNoun={vcsTerminology.workspaceNoun}
           editScope={AuthSettingsWriteScope}
           request={request}
           scripts={scripts}

@@ -1,6 +1,13 @@
 import type { VcsStatusResult } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { buildMenuItems, getGitActionDisabledReason, resolveQuickAction } from "./gitActions.ts";
+import {
+  buildMenuItems,
+  getGitActionDisabledReason,
+  resolveGitMenuItemStates,
+  resolveGitQuickActionState,
+  resolveQuickAction,
+  WEB_GIT_ACTION_POLICY,
+} from "./gitActions.ts";
 
 const clean: VcsStatusResult = {
   isRepo: true,
@@ -30,12 +37,14 @@ type Case = {
   remote?: boolean;
   busy?: boolean;
   mobile: readonly [readonly string[], string];
+  web: readonly [readonly string[], string];
 };
 const cases: Case[] = [
   {
     name: "clean Git ahead",
     status: clean,
     mobile: [["push", "pr"], "create_pr"],
+    web: [["push", "pr"], "create_pr"],
   },
   {
     name: "fallback detached Git HEAD",
@@ -49,67 +58,79 @@ const cases: Case[] = [
       },
     },
     mobile: [[], "show_hint"],
+    web: [[], "show_hint"],
   },
   {
     name: "dirty Git ahead",
     status: { ...clean, hasWorkingTreeChanges: true },
     mobile: [["commit", "pr"], "commit_push_pr"],
+    web: [["commit", "push", "pr"], "commit_push_pr"],
   },
   {
     name: "dirty jj ahead",
     status: { ...clean, vcs: { kind: "jj" }, hasWorkingTreeChanges: true },
     mobile: [["commit"], "commit_push_pr"],
+    web: [["commit", "push"], "commit_push_pr"],
   },
   {
     name: "clean jj ahead",
     status: { ...clean, vcs: { kind: "jj" } },
     mobile: [["push", "pr"], "create_pr"],
+    web: [["push", "pr"], "create_pr"],
   },
   {
     name: "jj no bookmark",
     status: { ...clean, vcs: { kind: "jj" }, refName: null },
     mobile: [[], "show_hint"],
+    web: [[], "show_hint"],
   },
   {
     name: "unsupported jj",
     status: { ...clean, vcs: { kind: "jj", unsupportedReason: "Unsupported workspace" } },
     mobile: [[], "show_hint"],
+    web: [[], "show_hint"],
   },
   {
     name: "busy",
     status: clean,
     busy: true,
     mobile: [[], "show_hint"],
+    web: [[], "show_hint"],
   },
   {
     name: "behind",
     status: { ...clean, aheadCount: 0, behindCount: 1 },
     mobile: [[], "run_pull"],
+    web: [[], "run_pull"],
   },
   {
     name: "diverged jj",
     status: { ...clean, vcs: { kind: "jj" }, behindCount: 1 },
     mobile: [[], "show_hint"],
+    web: [[], "show_hint"],
   },
   {
     name: "no remote",
     status: { ...clean, hasUpstream: false },
     remote: false,
     mobile: [[], "show_hint"],
+    web: [[], "open_publish"],
   },
   {
     name: "open PR up to date",
     status: { ...clean, aheadCount: 0, pr: openPr },
     mobile: [["pr"], "open_pr"],
+    web: [[], "show_hint"],
   },
   {
     name: "pushed feature",
     status: { ...clean, aheadCount: 0 },
     mobile: [["pr"], "create_pr"],
+    web: [["pr"], "create_pr"],
   },
 ];
 
-describe("named mobile action policies", () => {
+describe("named action policies", () => {
   it.each(cases)("$name", ({ status, remote = true, busy = false, mobile }) => {
     const menu = buildMenuItems(status, busy, remote);
     expect(menu.filter((item) => !item.disabled).map((item) => item.id)).toEqual(mobile[0]);
@@ -147,6 +168,13 @@ describe("named mobile action policies", () => {
         ).toBe("Commit local changes before pushing.");
       }
     }
+  });
+
+  it.each(cases)("web policy: $name", ({ status, remote = true, busy = false, web }) => {
+    const menu = resolveGitMenuItemStates(status, busy, remote, WEB_GIT_ACTION_POLICY);
+    expect(menu.filter((item) => !item.disabled).map((item) => item.id)).toEqual(web[0]);
+    const quick = resolveGitQuickActionState(status, busy, false, remote, WEB_GIT_ACTION_POLICY);
+    expect("action" in quick ? quick.action : quick.kind).toBe(web[1]);
   });
 
   it.each(["jj git colocation enable", "Could not read the Jujutsu workspace repository pointer."])(
