@@ -12,11 +12,13 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/t3-testflight.XXXXXX")"
 LOG="$WORK/build.log"
 export T3CODE_IOS_TEAM_ID="${T3CODE_IOS_TEAM_ID:-28AUT7GBK3}"
 export T3CODE_IOS_BUNDLE_ID="${T3CODE_IOS_BUNDLE_ID:-com.kaedenmurphy.t3code}"
+export T3CODE_PRODUCT_NAME="${T3CODE_PRODUCT_NAME:-Paroxity Code}"
 export T3CODE_CLERK_PUBLISHABLE_KEY="${T3CODE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsudDMuY29kZXMk}"
 export T3CODE_CLERK_JWT_TEMPLATE="${T3CODE_CLERK_JWT_TEMPLATE:-t3-relay}"
 export T3CODE_CLERK_CLI_OAUTH_CLIENT_ID="${T3CODE_CLERK_CLI_OAUTH_CLIENT_ID:-hzxSgY2cH10sDU2r}"
 export T3CODE_RELAY_URL="${T3CODE_RELAY_URL:-https://relay.t3.codes}"
 TEAM_ID="$T3CODE_IOS_TEAM_ID"
+APP_TARGET="$(printf '%s' "$T3CODE_PRODUCT_NAME" | tr -cd 'A-Za-z0-9')"
 
 export PATH="$HOME/.vite-plus/bin:/nix/var/nix/profiles/default/bin:$PATH"
 export APP_VARIANT=production EXPO_NO_GIT_STATUS=1
@@ -28,14 +30,14 @@ cd "$MOBILE"
 echo "1/3 prebuild + pods"
 nix shell nixpkgs#cocoapods -c npx expo prebuild --clean --platform ios >>"$LOG" 2>&1
 # Prebuild writes a literal CFBundleVersion 1; TestFlight needs a new one per upload.
-for plist in ios/T3Code/Info.plist ios/ExpoWidgetsTarget/Info.plist; do
+for plist in "ios/$APP_TARGET/Info.plist" ios/ExpoWidgetsTarget/Info.plist; do
   [ -f "$plist" ] && /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$plist"
 done
 
 echo "2/3 archive"
-xcodebuild -workspace ios/T3Code.xcworkspace -scheme T3Code -configuration Release \
+xcodebuild -workspace "ios/$APP_TARGET.xcworkspace" -scheme "$APP_TARGET" -configuration Release \
   -destination generic/platform=iOS -derivedDataPath ios/build \
-  -archivePath "$WORK/T3Code.xcarchive" -allowProvisioningUpdates \
+  -archivePath "$WORK/$APP_TARGET.xcarchive" -allowProvisioningUpdates \
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER" DEVELOPMENT_TEAM="$TEAM_ID" archive >>"$LOG" 2>&1 \
   || { grep -E "error:" "$LOG" | sort -u | tail -10; exit 1; }
 
@@ -51,7 +53,7 @@ cat >"$WORK/ExportOptions.plist" <<EOF
 EOF
 
 echo "3/3 upload to TestFlight"
-xcodebuild -exportArchive -archivePath "$WORK/T3Code.xcarchive" \
+xcodebuild -exportArchive -archivePath "$WORK/$APP_TARGET.xcarchive" \
   -exportOptionsPlist "$WORK/ExportOptions.plist" -exportPath "$WORK/export" \
   -allowProvisioningUpdates >>"$LOG" 2>&1 \
   || { grep -E "error:" "$LOG" | sort -u | tail -10; exit 1; }

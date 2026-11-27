@@ -33,14 +33,13 @@ const KEEP_UPSTREAM_NAME: Readonly<Record<string, readonly string[]>> = {
   "apps/desktop/src/app/DesktopUserData.ts": [`"T3 Code (Dev)"`, `"T3 Code (Alpha)"`],
   "apps/desktop/src/app/DesktopLegacyLocalStorage.ts": [`"T3 Code (Alpha)"`],
   // Identities other services and peers know: Codex picks models by originator, peers strip
-  // the link prefix, and the GitHub app, Tangled client and OAuth names are upstream's.
+  // the link prefix, and the GitHub app and OAuth names are upstream's.
   "apps/server/src/provider/CodexProvider.ts": [`CODEX_CLIENT_NAME = "T3 Code"`],
   "apps/server/src/peer/PeerLinks.ts": [`LINK_CLIENT_NAME_PREFIX = "T3 Code · "`],
   "apps/server/src/provider/CodexChatGptAuth.ts": [`agent_name_hint: "T3 Code"`],
   "apps/server/src/provider/acp/AntigravityAcpSupport.ts": [`title: "T3 Code"`],
   "packages/provider-muse/src/server/sdk.ts": [`title: "T3 Code"`],
   "packages/source-control-github/src/shared/definition.ts": [`appName: "T3 Code for GitHub"`],
-  "packages/source-control-tangled/src/shared/definition.ts": [`appName: "T3 Code"`],
   // Author of commits pushed to the user's branches, with upstream's noreply address.
   "packages/source-control-github/src/server/githubStackRebase.ts": [
     `GIT_CONFIG_VALUE_1: "T3 Code"`,

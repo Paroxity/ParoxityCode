@@ -32,7 +32,7 @@ env:
 jobs:
   prepare:
     name: Resolve version
-    if: github.repository == 'kaedendev/t3code'
+    if: github.repository == 'Paroxity/ParoxityCode'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:

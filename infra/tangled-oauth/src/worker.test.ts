@@ -56,6 +56,7 @@ describe("relay", () => {
     const metadata = (await response.json()) as ReturnType<typeof clientMetadata>;
     expect(metadata).toMatchObject({
       client_id: `${ORIGIN}/tangled/client-metadata.json`,
+      client_name: "Paroxity Code",
       redirect_uris: [`${ORIGIN}/tangled/callback`],
       token_endpoint_auth_method: "none",
       dpop_bound_access_tokens: true,

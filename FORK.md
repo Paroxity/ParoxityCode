@@ -1,13 +1,13 @@
-# The kaedendev fork
+# The Paroxity Code fork
 
-This fork is an upstream T3 Code release plus Jujutsu (jj) support and a Tangled integration. It has its own release channel, and its servers and desktop apps update only from `kaedendev/t3code`.
+This fork is an upstream T3 Code release plus Jujutsu (jj) support and a Tangled integration. It has its own release channel, and its servers and desktop apps update only from `Paroxity/ParoxityCode`.
 
 ## What the fork carries
 
-`kaeden/stable` is an upstream release tag on `pingdotgg/t3code` with the fork's commits on top. It takes each new upstream base as a merge, so its history only moves forward and branches cut from it stay valid. The base is the latest stable tag (`vX.Y.Z`) unless the owner wants a feature that only a nightly has; then it is that nightly (`vX.Y.Z-nightly.DATE.N`), until a stable release catches up. List the fork's commits with:
+`paroxity/stable` is an upstream release tag on `pingdotgg/t3code` with the fork's commits on top. It takes each new upstream base as a merge, so its history only moves forward and branches cut from it stay valid. The base is the latest stable tag (`vX.Y.Z`) unless the owner wants a feature that only a nightly has; then it is that nightly (`vX.Y.Z-nightly.DATE.N`), until a stable release catches up. List the fork's commits with:
 
 ```sh
-git log --oneline --no-merges $(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*.*.1[0-9][0-9][0-9][0-9]' --exclude '*-preview.*' kaeden/stable)..kaeden/stable
+git log --oneline --no-merges $(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*.*.1[0-9][0-9][0-9][0-9]' --exclude '*-preview.*' paroxity/stable)..paroxity/stable
 ```
 
 The fork's commits fall into three parts:
@@ -17,7 +17,7 @@ The fork's commits fall into three parts:
   - jj needs version 0.46.0 or newer on the server's `PATH`. When jj is missing, broken, or too old, the repo falls back to git and shows a notice.
 - **Tangled.** [Tangled](https://tangled.org), the AT Protocol git forge, is a source control host like GitHub. See the Tangled section of `docs/user/source-control.md`.
   - The code is `packages/source-control-tangled`. It reads Tangled's public index at `api.tangled.org` and writes through the knot with service-auth tokens.
-  - Sign-in is atproto OAuth as a public client (PKCE, PAR and DPoP-bound tokens, no client secret) through a relay Worker at `t3-oauth.kaeden.codes` (`infra/tangled-oauth`). The relay serves the client metadata and holds each sign-in's callback: the server files the sign-in's `state` first and gets a poll token back, and only that token collects the callback. Deploy it with `pnpm exec alchemy deploy --stage prod` from `infra/tangled-oauth`. `T3CODE_TANGLED_OAUTH_RELAY_URL` points a server at another relay.
+  - Sign-in is atproto OAuth as a public client (PKCE, PAR and DPoP-bound tokens, no client secret) through a relay Worker at `tangled-oauth.code.paroxity.net` (`infra/tangled-oauth`). The relay serves the client metadata and holds each sign-in's callback: the server files the sign-in's `state` first and gets a poll token back, and only that token collects the callback. Deploy it with `pnpm exec alchemy deploy --stage prod` from `infra/tangled-oauth`. `T3CODE_TANGLED_OAUTH_RELAY_URL` points a server at another relay.
   - PDSes cap a public client's sessions at about two weeks, so the Tangled sign-in lapses that often. Sessions the old confidential client saved read as signed out after an upgrade, so each server signs in again once.
   - Pull requests have rounds. Pushing a branch with an open Tangled pull request submits a new round, and the review picker shows each round and what changed since an earlier one. The rounds picker works with any host that reports rounds.
 - **Release plumbing.**
@@ -32,20 +32,20 @@ The fork also ships its own iOS app through TestFlight; see [Mobile app](#mobile
 
 These trip up agents that follow upstream's habits:
 
-- **Base branch.** Open PRs against `kaeden/stable` on `kaedendev/t3code`. In T3 worktrees that repository is the `origin` remote; the update steps below call it `fork`. Never open PRs on `pingdotgg/t3code`.
-- **CI never finishes.** Most jobs run on Blacksmith runners, which the fork doesn't have, so they stay queued forever. "Agent context budget" fails because it measures against upstream `main`. Run `vp run check:changed origin/kaeden/stable` and the affected tests locally instead. Merge with `gh pr merge --squash --admin` and cancel the queued runs. Without the base argument, `check:changed` diffs against upstream and fails with `spawn E2BIG`.
+- **Base branch.** Open PRs against `paroxity/stable` on `Paroxity/ParoxityCode`. In T3 worktrees that repository is the `origin` remote; the update steps below call it `fork`. Never open PRs on `pingdotgg/t3code`.
+- **CI never finishes.** Most jobs run on Blacksmith runners, which the fork doesn't have, so they stay queued forever. "Agent context budget" fails because it measures against upstream `main`. Run `vp run check:changed origin/paroxity/stable` and the affected tests locally instead. Merge with `gh pr merge --squash --admin` and cancel the queued runs. Without the base argument, `check:changed` diffs against upstream and fails with `spawn E2BIG`.
 - **Upstream-only workflows.** The `Mobile EAS *` workflows and `release.yml` are gated on `pingdotgg/t3code` and never run here. EAS builds go to upstream's Expo project and Apple team, so don't use `eas build` or `eas submit` for the fork.
 - **Tools off `PATH`.** Agent shells may not load a login profile. `vp` lives in `~/.vite-plus/bin`. This Mac has no CocoaPods or Homebrew, so run anything that needs `pod`, such as `vp run mobile:install` after a native change, inside `nix shell nixpkgs#cocoapods -c …`.
 
 ## Product name
 
-Release builds call the app Paroxity Code. The source keeps upstream's "T3 Code", so upstream merges don't touch it; `fork-release.yml` sets `T3CODE_PRODUCT_NAME`, and dev builds and tests keep upstream's name.
+Release builds call the app Paroxity Code. The source keeps upstream's "T3 Code", so upstream merges don't touch it; `fork-release.yml` and `fork-testflight.sh` set `T3CODE_PRODUCT_NAME`, and dev builds and tests keep upstream's name.
 
 - **Text.** `scripts/lib/product-name.ts` rewrites the name while the web, desktop main and server bundles are built, translation catalogs included. GT finds each translation by a hash of the English source, so the plugin also makes GT's `hashSource` hash the upstream name; without that, every string naming the app would lose its translations. The web and desktop main builds fail if that hook disappears after a GT upgrade.
-- **What keeps "T3 Code".** `KEEP_UPSTREAM_NAME` in the same file lists the strings that must not change: markers that earlier builds wrote to disk, legacy profile names, the Electron app name that keys the Keychain item for saved cookies and secrets, and names other services know (Codex's originator, the peer-link prefix, upstream's GitHub app and Tangled client, the commit author on stacked PRs). The build fails if one of them moves, so check the new spot after an upstream merge.
+- **What keeps "T3 Code".** `KEEP_UPSTREAM_NAME` in the same file lists the strings that must not change: markers that earlier builds wrote to disk, legacy profile names, the Electron app name that keys the Keychain item for saved cookies and secrets, and names other services know (Codex's originator, the peer-link prefix, upstream's GitHub app, the commit author on stacked PRs). The build fails if one of them moves, so check the new spot after an upstream merge.
 - **Logo.** `T3Wordmark` draws a black hole instead of "T3" when `VITE_FORK_PRODUCT_NAME` is set, and the sidebar and standalone pages show "Paroxity" as text. Every channel's desktop, web and iOS icons come from `assets/paroxity` (the `paroxity` brand in `scripts/lib/brand-assets.ts`). Leave upstream's `assets/nightly` and `assets/prod` untouched so upstream merges take its artwork changes cleanly.
 - **App bundle.** Packaging names the bundle `Paroxity Code (Beta).app`, which is what the Dock and menu bar show. Electron's app name comes from the staged `package.json` and `app.setName`, never the bundle, so saved secrets survive the rename. An auto-update keeps the old file name in `/Applications`, so an updated Mac keeps "T3 Code (Beta)" in the Dock until the app is reinstalled from the DMG or renamed.
-- **Not renamed:** the release asset file names, the `t3` command, the Linux desktop files and GNOME extension, and the iOS app.
+- **Not renamed:** the release asset file names, the `t3` command, and the Linux desktop files and GNOME extension.
 
 ## T3 Connect
 
@@ -67,12 +67,12 @@ Fork versions sort above every upstream release on the same minor version. Clien
 
 1. Run a draft build:
    ```sh
-   gh workflow run fork-release.yml --repo kaedendev/t3code --ref kaeden/stable
+   gh workflow run fork-release.yml --repo Paroxity/ParoxityCode --ref paroxity/stable
    ```
 2. Check the run's **Verify macOS signature** summary. It must show `Gatekeeper: Notarized Developer ID` and no problems. A publish run fails on any problem.
 3. Publish it:
    ```sh
-   gh workflow run fork-release.yml --repo kaedendev/t3code --ref kaeden/stable -f publish=true
+   gh workflow run fork-release.yml --repo Paroxity/ParoxityCode --ref paroxity/stable -f publish=true
    ```
 
 These builds cover the CLI and desktop app only. Ship the iOS app separately; see [Mobile app](#mobile-app).
@@ -81,15 +81,15 @@ After a release is published, **Update everything** in a fork client moves the f
 
 ## Mobile app
 
-The fork's iOS app is signed by Kaeden's team (`28AUT7GBK3`) as `com.kaedenmurphy.t3code` and distributed through TestFlight. The app config uses that team and bundle ID only when `T3CODE_IOS_TEAM_ID` and `T3CODE_IOS_BUNDLE_ID` are set. Without them, dev and preview builds keep upstream's identifiers, so don't put either variable in `.env` or `.env.local`.
+The fork's iOS app is signed by Kaeden's team (`28AUT7GBK3`) as `com.kaedenmurphy.t3code`, named `Paroxity Code` via `T3CODE_PRODUCT_NAME`, and distributed through TestFlight. The app config uses that team, bundle ID, and product name only when `T3CODE_IOS_TEAM_ID`, `T3CODE_IOS_BUNDLE_ID`, and `T3CODE_PRODUCT_NAME` are set. Without them, dev and preview builds keep upstream's identifiers, so don't put any of those variables in `.env` or `.env.local`.
 
-To ship a TestFlight build, merge to `kaeden/stable`, then run this from a clean checkout of it on the Mac:
+To ship a TestFlight build, merge to `paroxity/stable`, then run this from a clean checkout of it on the Mac:
 
 ```sh
 scripts/fork-testflight.sh
 ```
 
-It sets the signing and T3 Connect values, runs a clean prebuild with CocoaPods from Nix, archives with automatic signing through the Apple account signed into Xcode, and uploads with a timestamp build number. It takes about 10 minutes, and Apple then needs 5 to 30 minutes to process the build. It prints its log path; on failure it shows the last errors.
+It sets the signing, product name, and T3 Connect values, runs a clean prebuild with CocoaPods from Nix, archives with automatic signing through the Apple account signed into Xcode, and uploads with a timestamp build number. It takes about 10 minutes, and Apple then needs 5 to 30 minutes to process the build. It prints its log path; on failure it shows the last errors.
 
 - The first archive after a new Swift package can stop at "Resolving packages" with no CPU use. SwiftPM is waiting on a macOS keychain prompt for github.com credentials. Click **Always Allow** on the Mac.
 - There's no Android release for the fork.
@@ -109,7 +109,7 @@ Do this once per machine. After that, updates come from the fork.
 
 - **Linux or macOS background service:**
   ```sh
-  T3CODE_RELEASE_BASE_URL=https://github.com/kaedendev/t3code/releases/download t3 update <fork-version>
+  T3CODE_RELEASE_BASE_URL=https://github.com/Paroxity/ParoxityCode/releases/download t3 update <fork-version>
   ```
 - **Mac desktop app:**
   1. Quit T3 Code.
@@ -120,16 +120,16 @@ Do this once per machine. After that, updates come from the fork.
 
 ## Merge a new upstream release
 
-An agent can run these steps unattended. Every gate must pass before anything ships. Never rebase, amend or force-push `kaeden/stable`: contributors branch from it. Fixes found along the way are new commits on the merge branch.
+An agent can run these steps unattended. Every gate must pass before anything ships. Never rebase, amend or force-push `paroxity/stable`: contributors branch from it. Fixes found along the way are new commits on the merge branch.
 
 1. Find the target. The newest stable is `gh release view --repo pingdotgg/t3code --json tagName -q .tagName`. For a nightly, take the newest `v*-nightly.*` tag that contains the wanted commits (`git merge-base --is-ancestor <commit> <tag>`). Call it `NEW`.
-2. Find the current base: `OLD=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*.*.1[0-9][0-9][0-9][0-9]' --exclude '*-preview.*' fork/kaeden/stable)`. If `NEW` equals `OLD`, stop.
-3. Create a worktree next to the others. Base a branch `kaeden/stable-$NEW` on `fork/kaeden/stable`, then run `git merge --no-ff $NEW`.
+2. Find the current base: `OLD=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*.*.1[0-9][0-9][0-9][0-9]' --exclude '*-preview.*' fork/paroxity/stable)`. If `NEW` equals `OLD`, stop.
+3. Create a worktree next to the others. Base a branch `paroxity/stable-$NEW` on `fork/paroxity/stable`, then run `git merge --no-ff $NEW`.
 4. Resolve each conflict so both upstream's change and the fork's intent survive. Never revert upstream work to make a hunk apply. Upstream code that conflicts with nothing can still break the fork, so the gates below run on the merge result.
 5. Find git calls that upstream added between `OLD` and `NEW` in `apps/server/src`, and route them by VCS kind. Record any you leave for later.
 6. Run the gates. All must pass:
    - `vp run check:changed $NEW`
    - `vp test run apps/server/src/jj apps/server/src/vcs apps/server/src/checkpointing apps/server/src/git apps/server/src/pullRequest packages/source-control-tangled infra/tangled-oauth scripts/fork-release-version.test.ts`
-7. Push `kaeden/stable-$NEW` to `fork`. Run a draft build from that branch with `--ref kaeden/stable-$NEW`.
+7. Push `paroxity/stable-$NEW` to `fork`. Run a draft build from that branch with `--ref paroxity/stable-$NEW`.
 8. Report to the owner: the new base, the conflicts and how each was resolved, the gate results, and the draft release.
-9. When the owner approves, fast-forward `kaeden/stable` with `git push fork kaeden/stable-$NEW:kaeden/stable` (never `--force`) and publish a build from `kaeden/stable`. If the push is refused because `kaeden/stable` moved, merge `fork/kaeden/stable` into the branch, rerun the gates, and push again.
+9. When the owner approves, fast-forward `paroxity/stable` with `git push fork paroxity/stable-$NEW:paroxity/stable` (never `--force`) and publish a build from `paroxity/stable`. If the push is refused because `paroxity/stable` moved, merge `fork/paroxity/stable` into the branch, rerun the gates, and push again.

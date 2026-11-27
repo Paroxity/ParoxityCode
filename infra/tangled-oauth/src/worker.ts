@@ -7,7 +7,7 @@
 
 export interface Env {
   readonly DB: D1Database;
-  /** This Worker's origin, as `https://t3-oauth.kaeden.codes`. */
+  /** This Worker's origin, as `https://tangled-oauth.code.paroxity.net`. */
   readonly ORIGIN: string;
 }
 
@@ -37,7 +37,7 @@ export function clientId(origin: string): string {
 export function clientMetadata(origin: string) {
   return {
     client_id: clientId(origin),
-    client_name: "T3 Code",
+    client_name: "Paroxity Code",
     client_uri: origin,
     application_type: "web",
     grant_types: ["authorization_code", "refresh_token"],
@@ -118,7 +118,7 @@ export default {
         return page("Sign-in failed", "This sign-in link is not valid or was already used.", 400);
       const error = url.searchParams.get("error_description") ?? url.searchParams.get("error");
       return error === null
-        ? page("Signed in to Tangled", "You can close this tab and return to T3 Code.")
+        ? page("Signed in to Tangled", "You can close this tab and return to Paroxity Code.")
         : page("Sign-in did not finish", escapeHtml(error));
     }
 

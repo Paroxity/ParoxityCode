@@ -2,16 +2,16 @@ import * as Alchemy from "alchemy";
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Effect from "effect/Effect";
 
-/** Baked into T3 Code as Tangled's OAuth client ID, so it must never move. */
-const DOMAIN = "t3-oauth.kaeden.codes";
-const ZONE_ID = "fddb0c2795baf63e7fe0cf8d75575b7e";
+/** Baked into Paroxity Code as Tangled's OAuth client ID, so it must never move. */
+const DOMAIN = "tangled-oauth.code.paroxity.net";
+const ZONE_NAME = "paroxity.net";
 
 const Callbacks = Cloudflare.D1.Database("Callbacks", { migrations: "./migrations" });
 
 const Worker = Cloudflare.Worker("Worker", {
   main: "./src/worker.ts",
   compatibility: { date: "2026-10-01" },
-  domain: { name: DOMAIN, zoneId: ZONE_ID },
+  domain: { name: DOMAIN, zoneName: ZONE_NAME },
   env: {
     DB: Callbacks,
     ORIGIN: `https://${DOMAIN}`,

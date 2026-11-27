@@ -33,7 +33,7 @@ import { TangledAuth, TangledAuthError, type TangledViewer } from "./TangledAuth
 import * as TangledOAuth from "./TangledOAuth.ts";
 
 /** The relay in `infra/tangled-oauth`: client metadata and the callback the server polls for. */
-const DEFAULT_RELAY_ORIGIN = "https://t3-oauth.kaeden.codes";
+const DEFAULT_RELAY_ORIGIN = "https://tangled-oauth.code.paroxity.net";
 /** Points the server at another relay, as one deployed to test the relay itself. */
 const RELAY_ORIGIN_ENV = "T3CODE_TANGLED_OAUTH_RELAY_URL";
 
